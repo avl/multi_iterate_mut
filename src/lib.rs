@@ -34,18 +34,20 @@ macro_rules! make_run1 {
             let pool_size = pool.thread_count() as usize;
             let chunk_size = (self.data.len() + pool_size - 1) / pool_size;
 
-            let mut aux1_closures: Vec<_> = (0..pool_size).map(|_| FuncThreadData { data: (0..pool_size).map(|_| Vec::new()).collect() }).collect();
+            let mut aux_closures: (Vec<_>,) =
+                ( (0..pool_size).map(|_| FuncThreadData { data: (0..pool_size).map(|_| Vec::new()).collect() }).collect()
+                ,);
 
             {
                 let selfdata = &mut self.data;
 
                 let aux1ref = &self.aux1;
-                let aux1_closures_ref = &mut aux1_closures;
+                let aux_closures_ref = &mut aux_closures;
 
                 let l_ref = &l;
                 pool.scoped(move |scope| {
                     for (datachunk_items, aux1_mutators) in &mut selfdata.chunks_mut(chunk_size)
-                        .zip(aux1_closures_ref.iter_mut()) {
+                        .zip(aux_closures_ref.0.iter_mut()) {
                         let mut context = MultiIterateContext1 {
                             chunk_size,
                             aux_mutator_closures: (&mut aux1_mutators.data,),
@@ -61,7 +63,8 @@ macro_rules! make_run1 {
                     }
                 });
             }
-            self.run_aux(aux1_closures, pool, pool_size, chunk_size);
+
+            Self::run_aux(&mut self.aux1, aux_closures.0, pool, pool_size, chunk_size);
         }
     }
 }
@@ -74,7 +77,7 @@ impl<'a,'b,T:Send,A1:Send+Sync,FA1:for <'r> FnOnce(&'r mut A1) + Send > MultiIte
 
 
     #[inline]
-    fn run_aux(&mut self, mut aux1_closures:Vec<FuncThreadData<FA1>>, pool: &mut Pool, pool_size: usize, chunk_size: usize) {
+    fn run_aux(aux1:&mut Vec<A1>, mut aux1_closures:Vec<FuncThreadData<FA1>>, pool: &mut Pool, pool_size: usize, chunk_size: usize) {
         let mut aux1_pass_slices = Vec::new();
         for i in 0..pool_size {
             aux1_pass_slices.push(Vec::new());
@@ -86,8 +89,8 @@ impl<'a,'b,T:Send,A1:Send+Sync,FA1:for <'r> FnOnce(&'r mut A1) + Send > MultiIte
             }
 
         }
-        let aux1_size = self.aux1.len();
-        let mut cur_aux1_slice = &mut self.aux1[..];
+        let aux1_size = aux1.len();
+        let mut cur_aux1_slice = &mut aux1[..];
 
         pool.scoped(|scope| {
             let mut current_start_index = 0;
