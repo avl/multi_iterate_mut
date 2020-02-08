@@ -9,39 +9,45 @@ struct FuncThreadData<FA1> {
     data: Vec<Vec<(usize,FA1)>>
 }
 
-struct MultiIterateMut1<'a,'b,T, A1, FA1:for <'r> FnOnce(&'r mut A1)> {
+struct MultiIterateMut1<'a,'b,'c,T,X, A1, FA1:for <'r> FnOnce(&'r mut A1)> {
     data : &'a mut Vec<T>,
+    attached: &'c mut Vec<X>,
     aux : (&'b mut Vec<A1>,),
     p1: PhantomData<FA1>,
 }
 
-struct MultiIterateMut2<'a,'b,T,
+struct MultiIterateMut2<'a,'b,'c,T,X,
     A1, FA1:for <'r> FnOnce(&'r mut A1),
     A2, FA2:for <'r> FnOnce(&'r mut A2)
 > {
     data : &'a mut Vec<T>,
+    attached: &'c mut Vec<X>,
     aux : (&'b mut Vec<A1>,&'b mut Vec<A2>),
     p1: (PhantomData<FA1>,PhantomData<FA2>),
 }
 
 
-impl<'a,'b,T,
+impl<'a,'b,'c,T,X,
     A1, FA1:for <'r> FnOnce(&'r mut A1),
-> MultiIterateMut1<'a,'b,T,A1,FA1> {
-    pub fn new(data:&'a mut Vec<T>, aux:(&'b mut Vec<A1>,)) -> MultiIterateMut1<'a,'b,T,A1,FA1> {
+> MultiIterateMut1<'a,'b,'c,T,X,A1,FA1> {
+    pub fn new(data:&'a mut Vec<T>, attached: &'c mut Vec<X>, aux:(&'b mut Vec<A1>,)) -> MultiIterateMut1<'a,'b,'c,T,X,A1,FA1> {
         MultiIterateMut1 {
-            data, aux ,p1:PhantomData
+            data, aux,
+            attached,
+            p1:PhantomData
         }
     }
 }
 
-impl<'a,'b,T,
+impl<'a,'b,'c,T,X,
     A1, FA1:for <'r> FnOnce(&'r mut A1),
     A2, FA2:for <'r> FnOnce(&'r mut A2)
-> MultiIterateMut2<'a,'b,T,A1,FA1,A2,FA2> {
-    pub fn new(data:&'a mut Vec<T>, aux:(&'b mut Vec<A1>,&'b mut Vec<A2>)) -> MultiIterateMut2<'a,'b,T,A1,FA1,A2,FA2> {
+> MultiIterateMut2<'a,'b,'c, T,X,A1,FA1,A2,FA2> {
+    pub fn new(data:&'a mut Vec<T>, attached: &'c mut Vec<X>, aux:(&'b mut Vec<A1>,&'b mut Vec<A2>)) -> MultiIterateMut2<'a,'b,'c,T,X,A1,FA1,A2,FA2> {
         MultiIterateMut2 {
-            data, aux,p1:(PhantomData,PhantomData)
+            data, aux,
+            attached,
+            p1:(PhantomData,PhantomData)
         }
     }
 }
@@ -117,7 +123,6 @@ macro_rules! make_run1 {
             let mut $aux_closures =
                 (
                     emit_init_pools!(pool_size, $($tuple_keys),+)
-//                    (0..pool_size).map(|_| FuncThreadData { data: (0..pool_size).map(|_| Vec::new()).collect() }).collect()
                 );
 
             {
@@ -147,23 +152,22 @@ macro_rules! make_run1 {
             };
 
             let mut self_aux = &mut self.aux;
-            //run_aux((&mut self_aux.0, $aux_closures.0), auxdata);
             emit_run_aux!(&mut self_aux, $aux_closures, &mut auxdata, $($tuple_keys),+);
 
         }
     }
 }
 
-impl<'a,'b,T:Send,A1:Send+Sync,FA1:for <'r> FnOnce(&'r mut A1) + Send > MultiIterateMut1<'a,'b,T,A1,FA1> {
+impl<'a,'b,'c,T:Send,X:Send,A1:Send+Sync,FA1:for <'r> FnOnce(&'r mut A1) + Send > MultiIterateMut1<'a,'b,'c,T,X,A1,FA1> {
     make_run1!(run1,
     (Fn(&mut T, &mut MultiIterateContext1<T,A1,FA1>, &(&mut Vec<A1>,))),
     aux_closures, MultiIterateContext1, aux_closures_ref, 0);
 }
 
-impl<'a,'b,T:Send,
+impl<'a,'b,'c,T:Send,X:Send,
     A1:Send+Sync,FA1:for <'r> FnOnce(&'r mut A1) + Send,
     A2:Send+Sync,FA2:for <'r> FnOnce(&'r mut A2) + Send,
-> MultiIterateMut2<'a,'b,T,A1,FA1,A2,FA2> {
+> MultiIterateMut2<'a,'b,'c,T,X,A1,FA1,A2,FA2> {
     make_run1!(
         run1,
         (Fn(&mut T, &mut MultiIterateContext2<T,A1,FA1,A2,FA2>, &(&mut Vec<A1>,&mut Vec<A2>))),
@@ -282,7 +286,8 @@ mod tests {
 
         let mut data = Vec::new();
         let mut aux1 = Vec::new();
-        let mut test: MultiIterateMut1<usize,String,_> = MultiIterateMut1::new(&mut data, (&mut aux1,));
+        let mut t = Vec::new();
+        let mut test: MultiIterateMut1<usize,String,_,_> = MultiIterateMut1::new(&mut data, &mut t, (&mut aux1,));
 
         test.data.push(37);
         test.aux.0.push("Före".to_string());
@@ -310,7 +315,9 @@ mod tests {
         let mut data = Vec::new();
         let mut aux1 = Vec::new();
         let mut aux2 = Vec::new();
-        let mut test = MultiIterateMut2::new(&mut data, (&mut aux1, &mut aux2));
+        let mut t  = Vec::<()>::new();
+        let mut test = MultiIterateMut2::new(&mut data, &mut t,(&mut aux1, &mut aux2));
+        compile_error!("Use attached storage (per thread)")
         test.data.push(37);
         test.aux.0.push("Före0".to_string());
         test.aux.0.push("Före0".to_string());
@@ -343,9 +350,11 @@ mod tests {
         let mut pool = Pool::new(8);
         let mut data = Vec::new();
         let mut aux1 = Vec::new();
-        let mut test: MultiIterateMut1<UsizeExampleItem,UsizeExampleItem,_> = MultiIterateMut1 {
+        let mut t = Vec::<()>::new();
+        let mut test: MultiIterateMut1<UsizeExampleItem,_,UsizeExampleItem,_> = MultiIterateMut1 {
             data: &mut data,
             aux: (&mut aux1,),
+            attached: &mut t,
             p1: PhantomData,
         };
         let data_size = 1_000_000;
