@@ -2,8 +2,10 @@
 #![deny(warnings)]
 
 use std::marker::PhantomData;
-use scoped_threadpool::Pool;
 
+mod mypool;
+
+use mypool::Pool;
 #[repr(align(64))]
 struct FuncThreadData<FA1> {
     data: Vec<Vec<(usize,FA1)>>
@@ -136,6 +138,7 @@ macro_rules! make_run1 {
                 let self_attached = &mut self.attached;
                 let l_ref = &l;
                 pool.scoped(move |scope| {
+                    let mut thread_index = 0;
                     for ((datachunk_items, attached_item), aux_mutators) in &mut selfdata.chunks_mut(chunk_size)
                         .zip(self_attached.iter_mut())
                         .zip(emit_aux_iter!($aux_ref, $($tuple_keys),+)) {
@@ -143,11 +146,12 @@ macro_rules! make_run1 {
                         let mut context = $MultiIterateContext1::new(
                                 aux_mutators,chunk_size);
 
-                        scope.execute(move || {
+                        scope.execute(thread_index, move || {
                             for item in datachunk_items {
                                 l_ref(item, &mut context, auxref, attached_item);
                             }
                         });
+                        thread_index+=1;
                     }
                 });
             }
@@ -199,10 +203,12 @@ fn run_aux<A1:Send,FA1:for <'r> FnOnce(&'r mut A1) + Send>(aux_and_closures: (&m
 
     }
     let aux1_size = aux1.len();
-    let mut cur_aux1_slice = &mut aux1[..];
 
     pool.scoped(|scope| {
+        let mut cur_aux1_slice = &mut aux1[..];
+
         let mut current_start_index = 0;
+        let mut thread_index = 0;
         for pass in aux1_pass_slices {
 
             let aux_remain = aux1_size - current_start_index;
@@ -213,7 +219,7 @@ fn run_aux<A1:Send,FA1:for <'r> FnOnce(&'r mut A1) + Send>(aux_and_closures: (&m
             let (aux1_pass_slice, aux1_rest) = cur_aux1_slice.split_at_mut(cur_chunk_size);
 
 
-            scope.execute(move||{
+            scope.execute(thread_index, move||{
                 for pass_slice in pass {
                     for (index,func) in pass_slice.drain(..) {
                         debug_assert!(index>=current_start_index && index<current_start_index + cur_chunk_size);
@@ -221,6 +227,7 @@ fn run_aux<A1:Send,FA1:for <'r> FnOnce(&'r mut A1) + Send>(aux_and_closures: (&m
                     }
                 }
             });
+            thread_index += 1;
             current_start_index += cur_chunk_size;
             cur_aux1_slice = aux1_rest;
         };
@@ -284,7 +291,7 @@ pub mod tests {
     extern crate test;
     use super::MultiIterateMut1;
     use super::MultiIterateMut2;
-    use scoped_threadpool::Pool;
+    use crate::mypool::Pool;
     use test::Bencher;
     use std::marker::PhantomData;
 
