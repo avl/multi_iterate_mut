@@ -1,5 +1,5 @@
 #![feature(test)]
-#![deny(warnings)]
+//#![deny(warnings)]
 
 use std::marker::PhantomData;
 

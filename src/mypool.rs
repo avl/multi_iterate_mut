@@ -29,6 +29,7 @@ impl ThreadData {
         let tempbox:Box<dyn FnOnce()> = Box::new(f);
         let tempbox = unsafe{transmute(tempbox)};
         self.runner  = Some(tempbox);
+
         let runner_ref:(usize,usize) = unsafe { transmute ( (self.runner.as_mut().unwrap()).deref_mut() as *mut dyn FnOnce() ) };
         self.job_sender.send(Some(runner_ref)).unwrap();
     }
@@ -45,6 +46,7 @@ impl Scope {
             if thread.running {
                 thread.completion_receiver.recv().unwrap();
                 thread.running=false;
+                std::mem::forget(thread.runner.take().unwrap());
             }
         }
     }
@@ -79,7 +81,7 @@ impl Pool {
                         Ok(job) => {
                             match job {
                                 Some(job) =>  {
-                                    let job:*mut dyn FnMut() = unsafe { transmute(job) };
+                                    let job:*mut dyn Fn() = unsafe { transmute(job) };
                                     let fref = unsafe{&mut *job};
                                     fref();
                                     completion_sender.send(()).unwrap();
