@@ -7,12 +7,11 @@ use std::thread;
 use std::ops::DerefMut;
 use std::mem::transmute;
 
+#[repr(align(64))]
 struct ThreadData {
     job_sender: Sender<Option<(usize,usize)>>,
     completion_receiver: Receiver<()>,
     thread_id: JoinHandle<()>,
-    running: bool,
-    runner: Option<Box<dyn FnOnce()>>,
 }
 
 pub struct Scope {
@@ -20,6 +19,7 @@ pub struct Scope {
 }
 
 impl ThreadData {
+    /*
     pub fn execute<'a,F:FnOnce()+'a>(&mut self, f:F) {
         if self.running {
             panic!("Already running a job!");
@@ -31,24 +31,10 @@ impl ThreadData {
 
         let runner_ref:(usize,usize) = unsafe { transmute ( (self.runner.as_mut().unwrap()).deref_mut() as *mut dyn FnOnce() ) };
         self.job_sender.send(Some(runner_ref)).unwrap();
-    }
+    }*/
 }
 impl Scope {
 
-    pub fn execute<F:FnOnce()>(&mut self, thread_index:usize, f:F) {
-
-        self.threads[thread_index].execute(f);
-
-    }
-    fn wait_jobs(&mut self) {
-        for thread in &mut self.threads {
-            if thread.running {
-                thread.completion_receiver.recv().unwrap();
-                thread.running=false;
-                std::mem::forget(thread.runner.take().unwrap());
-            }
-        }
-    }
     fn exit(&mut self) {
         for thread in self.threads.drain(..) {
             thread.job_sender.send(None).unwrap();
@@ -69,6 +55,21 @@ impl Drop for Pool {
 }
 
 impl Pool {
+    pub fn execute_all<F:FnOnce()>(&mut self, args:&[F]) {
+
+        for (thread,arg) in self.scope.threads.iter().zip(args.iter()) {
+            let temp_f:&dyn FnOnce() = arg;
+            let runner_ref:(usize,usize) = unsafe { transmute ( temp_f as *const dyn FnOnce() ) };
+            thread.job_sender.send(Some(runner_ref)).unwrap();
+        }
+
+        for thread in &mut self.scope.threads {
+            thread.completion_receiver.recv().unwrap();
+        }
+
+
+    }
+
     pub fn new(thread_count: usize) -> Pool {
         let mut v = Vec::new();
         let core_ids = core_affinity::get_core_ids().unwrap();
@@ -106,8 +107,6 @@ impl Pool {
                 job_sender,
                 completion_receiver,
                 thread_id:thread,
-                running: false,
-                runner: None
             });
         }
 
@@ -115,10 +114,6 @@ impl Pool {
             scope:Scope {
                 threads: v
         }}
-    }
-    pub fn scoped<F:FnOnce(&mut Scope)>(&mut self, f:F) {
-        f(&mut self.scope);
-        self.scope.wait_jobs();
     }
     pub fn thread_count(&self) -> usize {
         self.scope.threads.len()
