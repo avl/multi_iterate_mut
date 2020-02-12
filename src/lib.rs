@@ -1,6 +1,5 @@
 #![feature(test)]
-//#![deny(warnings)]
-
+#![deny(warnings)]
 extern crate scoped_threadpool;
 extern crate test;
 extern crate rayon;
@@ -9,16 +8,21 @@ extern crate core_affinity;
 extern crate arrayvec;
 
 mod mypool;
-mod mypool2;
-use test::Bencher;
+pub mod mypool2;
+//#[cfg(test)]
+//use test::Bencher;
 use arrayvec::ArrayVec;
 
+
+pub const PROB_SIZE:usize = 100_000;
+pub const THREADS:usize = 12;
+
 pub struct UsizeExampleItem {
-    item : usize,
+    pub item : usize,
 }
 
 pub struct SimpleIterateMut<'a,T> {
-    data : &'a mut [T],
+    pub data : &'a mut [T],
 }
 
 impl<'a,T:Send> SimpleIterateMut<'a,T> {
@@ -67,7 +71,7 @@ impl<'a,T:Send> SimpleIterateMut<'a,T> {
 
         pool.scoped(move|scope|{
 
-            for (thread_index,datachunk_items) in self.data.chunks_mut(chunk_size).enumerate() {
+            for datachunk_items in self.data.chunks_mut(chunk_size) {
                 scope.execute(/*thread_index,*/ move||{
                     for item in datachunk_items {
                         fref(item);
@@ -82,7 +86,7 @@ impl<'a,T:Send> SimpleIterateMut<'a,T> {
         let fref=&f;
 
         rayon::scope(|s| {
-            for (thread_index,datachunk_items) in self.data.chunks_mut(chunk_size).enumerate() {
+            for datachunk_items in self.data.chunks_mut(chunk_size) {
                 s.spawn(|_| {
                     for item in datachunk_items {
                         fref(item);
@@ -94,11 +98,7 @@ impl<'a,T:Send> SimpleIterateMut<'a,T> {
     }
 }
 
-const PROB_SIZE:usize = 100_000;
-const THREADS:usize = 12;
-
-#[bench]
-fn benchmark_non_threaded(bench:&mut Bencher) {
+pub fn make_data() -> Vec<UsizeExampleItem> {
     let mut data = Vec::new();
     let data_size = PROB_SIZE;
     for i in 0..data_size {
@@ -106,8 +106,14 @@ fn benchmark_non_threaded(bench:&mut Bencher) {
             item:i,
         });
     }
-    bench.iter(move||{
+    data
+}
 
+/*
+#[bench]
+fn benchmark_non_threaded(bench:&mut Bencher) {
+    let mut data = make_data();
+    bench.iter(move||{
 
         //for (aux1,data) in &mut aux1.iter_mut().zip(data.iter_mut()) {
         for data in data.iter_mut() {
@@ -115,17 +121,10 @@ fn benchmark_non_threaded(bench:&mut Bencher) {
         }
     });
 }
-
 #[bench]
 fn benchmark_scoped_threadpool(bench:&mut Bencher) {
     let mut pool = scoped_threadpool::Pool::new(THREADS as u32);
-    let mut data = Vec::new();
-    let data_size = PROB_SIZE;
-    for i in 0..data_size {
-        data.push(UsizeExampleItem {
-            item:i,
-        });
-    }
+    let mut data = make_data();
     bench.iter(move||{
         let mut simple = SimpleIterateMut {
             data : &mut data,
@@ -142,13 +141,7 @@ fn benchmark_scoped_threadpool(bench:&mut Bencher) {
 
 #[bench]
 fn benchmark_rayon_scoped(bench:&mut Bencher) {
-    let mut data = Vec::new();
-    let data_size = PROB_SIZE;
-    for i in 0..data_size {
-        data.push(UsizeExampleItem {
-            item:i,
-        });
-    }
+    let mut data = make_data();
     bench.iter(move||{
         let mut simple = SimpleIterateMut {
             data : &mut data,
@@ -163,13 +156,7 @@ fn benchmark_rayon_scoped(bench:&mut Bencher) {
 #[bench]
 fn benchmark_mypool(bench:&mut Bencher) {
     let mut pool = mypool::Pool::new(THREADS);
-    let mut data = Vec::new();
-    let data_size = PROB_SIZE;
-    for i in 0..data_size {
-        data.push(UsizeExampleItem {
-            item:i,
-        });
-    }
+    let mut data = make_data();
     bench.iter(move||{
         let mut simple = SimpleIterateMut {
             data : &mut data,
@@ -187,25 +174,19 @@ fn benchmark_mypool(bench:&mut Bencher) {
 #[bench]
 fn benchmark_mypool2(bench:&mut Bencher) {
     let mut pool = mypool2::Pool::new(THREADS);
-    let mut data = Vec::new();
-    let data_size = PROB_SIZE;
-    for i in 0..data_size {
-        data.push(UsizeExampleItem {
-            item:i,
-        });
-    }
+    let mut data = make_data();
     bench.iter(move||{
         let mut simple = SimpleIterateMut {
             data : &mut data,
         };
-
         simple.run_mypool2(&mut pool,|item|{
             item.item += 1;
         });
-
     });
+
 }
 
 
 
+*/
 
