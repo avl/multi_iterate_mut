@@ -1,4 +1,18 @@
-# Low-overhead Parallelisation in Games 
+
+**TLDR**:
+
+Typical rust thread pool implementations give no control over which particular thread
+each task is scheduled on, possibly leading to intense cache thrashing for certain
+problems.
+
+**/TLDR**
+
+
+# Low-overhead Parallelisation in Games
+
+<sub>Author: Anders Musikka</sub>
+
+<sub>Date: 2020-02-16</sub>
 
 This blog post and git repo (https://github.com/avl/multi_iterate_mut) describes my search for a 
 way to parallelize simulation of cars, intersections and roads in a computer game project. 
@@ -218,7 +232,7 @@ the closure, avoiding the need for a box, but this would have the surprising eff
 execute could only be called with one particular closure type in each scope).
 
 Instead, we change the interface to the threadpool and get rid of the first user
-supplied closure. Instead, the pool takes an array of closures to execute.
+supplied closure. Now, the pool takes an array of closures to execute.
 
 The second "problem" can be solved by (braze yourself!) busy-waiting in the 
 worker threads on an atomic flag.
