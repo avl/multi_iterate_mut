@@ -1,4 +1,4 @@
-# Low-overhead parallelisation in games 
+# Low-overhead Parallelisation in Games 
 
 This blog post and git repo (https://github.com/avl/multi_iterate_mut) describes my search for a 
 way to parallelize simulation of cars, intersections and roads in a computer game project. 
@@ -18,7 +18,7 @@ the calculation may yield an update to a road or a car. There are hundreds of th
 intersections, about the same number of roads, and a million cars. Calculations need to be
 quick, so we should run as parallel as possible.
 
-## Part 1, the simple case
+## Part 1, the Simple Case
 
 Let's start by doing some operation on a Vec. For now, let's do something very simple, so that 
 we can measure the overhead of scheduling calculations onto multiple threads.
@@ -127,7 +127,7 @@ article about this is https://en.wikipedia.org/wiki/MOESI_protocol ).
 
 Unfortunately, there's no way to tell rayon which core a particular job should be executed on.
 
-### A thread aware threadpool
+### A Threadpool with Explicit Thread Specification
 
 So let's build our own threadpool which does allow this (**WARNING** experimental unsafe rust ahead!).
 
@@ -179,7 +179,7 @@ burns something like 16 times the resources.
 
 Clearly we're not yet done.
 
-### A faster threadpool
+### A Faster Threadpool
 
 So why is it still slow? 
 
@@ -241,7 +241,7 @@ Yay, 3 times faster than the single-thread version! When run on 12 threads.
 
 But can we do better?
 
-### Thread affinity
+### Thread Affinity
 
 The astute reader may have noticed that I have been talking about threads and cores
 as if they were interchangeable terms. In reality, of course, there's no guarantee
@@ -273,7 +273,7 @@ test benchmark_mypool2           ... bench:       2,510 ns/iter (+/- 47)
 Yay! Even faster. About 5 times faster than the single-threaded solution.
 
 
-### A broader view
+### A Broader View
 
 We've seen that it is possible to increment each item in an array very fast if:
 * Parts of it are in cache memory on different CPU-cores
@@ -296,11 +296,11 @@ In situations where the work being parallelized is not memory-bandwidth/latency 
 the amount of work done by each task is greater, the overhead described in this article
 isn't going to be felt. 
 
-### Limitations and fundamental problems of MyPool2
+### Limitations and Fundamental Problems of MyPool2
 
 MyPool2 as described above is an experiment, not broadly usable code. 
 
-#### Busy waiting
+#### Busy Waiting
 One problem is that busy-waiting in user-space is potentially extremely inefficient.
 
 Let's say I'm running a task on 12 threads, on a 12-core CPU. Now, anti-virus software
@@ -320,7 +320,7 @@ to the OS that we're one of 12 threads doing a lock-step job, and if we're in th
 loop over here, we're not really busy and if the OS decides to suspend any of the other threads
 it might just as well suspend all of the threads.  
 
-#### Uneven work-distribution
+#### Uneven Work-distribution
 Another major problem is that the crate as written will not distribute work evenly across threads.
 If on thread finished before another, there is no provision for it to steal work from its
 friends. It'll simply have to wait (burning CPU-cycles doing so!). 
@@ -350,17 +350,17 @@ I'm very interested in comments, questions and ideas! I have probably missed som
 Issues, pull requests are welcome.
 
  
- # License
- This text is CC BY-SA 4.0.
- The code in this repo i available under MIT-license:
- 
+# License
+This text is CC BY-SA 4.0.
+The code in this repo i available under MIT-license:
+
 ````
- Copyright 2020 Anders Musikka
- 
- Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+Copyright 2020 Anders Musikka
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ````
