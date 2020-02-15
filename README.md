@@ -28,10 +28,10 @@ In part 2 we will look into interactions between the different types of objects
 system.
 
 We want to apply an operation to each value in a Vec<T>. Maybe something like this (using the
-excellent 'rayon'-crate:
+excellent 'rayon'-crate):
 
 ````rust
-pub fn run_rayon_scoped<'b, T: Sync + Send, F: Fn(&mut T) + Send + Sync + 'static>(data: &'b mut [T], f: F, thread_count: usize) {
+pub fn run_rayon_scoped<T: Sync + Send, F: Fn(&mut T) + Send + Sync + 'static>(data: &mut [T], f: F, thread_count: usize) {
     let chunk_size = (data.len() + thread_count - 1) / thread_count;
 
     rayon::scope(|s| {
@@ -150,7 +150,7 @@ execution of an operation, like this:
 Running the same benchmark as before but with this new thread pool:
 
 ````rust
- pub fn run_mypool<'b,T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data:&'b mut [T], pool: &mut mypool::Pool, f: F) {
+ pub fn run_mypool<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data:&mut [T], pool: &mut mypool::Pool, f: F) {
      let thread_count = pool.thread_count() as usize;
      let chunk_size = (data.len() + thread_count - 1) / thread_count;
      let fref = &f;
