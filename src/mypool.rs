@@ -1,5 +1,3 @@
-
-
 use crossbeam::channel::{Sender,Receiver};
 use crossbeam::channel::bounded;
 use std::thread::{JoinHandle};
@@ -27,18 +25,15 @@ impl ThreadData {
         self.running = true;
         let tempbox:Box<dyn FnOnce()> = Box::new(f);
         let tempbox = unsafe{transmute(tempbox)};
-        self.runner  = Some(tempbox);
+        self.runner = Some(tempbox);
 
         let runner_ref:(usize,usize) = unsafe { transmute ( (self.runner.as_mut().unwrap()).deref_mut() as *mut dyn FnOnce() ) };
         self.job_sender.send(Some(runner_ref)).unwrap();
     }
 }
 impl Scope {
-
     pub fn execute<F:FnOnce()>(&mut self, thread_index:usize, f:F) {
-
         self.threads[thread_index].execute(f);
-
     }
     fn wait_jobs(&mut self) {
         for thread in &mut self.threads {

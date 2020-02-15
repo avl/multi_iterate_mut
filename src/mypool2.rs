@@ -45,14 +45,11 @@ impl Drop for Pool {
 impl Pool {
     #[inline]
     pub fn execute_all<F:FnOnce()>(&mut self, args:&[F]) {
-
         for (thread,arg) in self.scope.threads.iter().zip(args.iter()) {
             let temp_f:&dyn FnOnce() = arg;
             let runner_ref:(usize,usize) = unsafe { transmute ( temp_f as *const dyn FnOnce() ) };
-
             thread.cur_job.0.store(runner_ref.0,Ordering::SeqCst);
             thread.cur_job.1.store(runner_ref.1,Ordering::SeqCst);
-            //thread.job_sender.send(Some(runner_ref)).unwrap();
         }
 
         for thread in &mut self.scope.threads {
@@ -62,8 +59,6 @@ impl Pool {
                 }
             }
         }
-
-
     }
 
     pub fn new(thread_count: usize) -> Pool {

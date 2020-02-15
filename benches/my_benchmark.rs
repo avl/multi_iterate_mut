@@ -1,9 +1,8 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
 
-use multi_iterate_mut::SimpleIterateMut;
+use multi_iterate_mut::{run_rayon_scoped, run_mypool2};
 use multi_iterate_mut::mypool2::Pool;
 use multi_iterate_mut::make_data;
-use multi_iterate_mut::THREADS;
 
 
 pub fn pool2_benchmark(c: &mut Criterion) {
@@ -13,13 +12,10 @@ pub fn pool2_benchmark(c: &mut Criterion) {
             {
                 let mut pool = Pool::new(threads);
                 let mut data = make_data();
-                let mut simple = SimpleIterateMut {
-                    data: &mut data,
-                };
 
                 b.iter(|| {
-                    simple.run_mypool2(&mut pool, |item| {
-                        item.item += 1;
+                    run_mypool2(&mut data, &mut pool, |item| {
+                        *item += 1;
                     });
                 })
             }
@@ -36,13 +32,10 @@ pub fn rayon_benchmark(c: &mut Criterion) {
             {
 
                 let mut data = make_data();
-                let mut simple = SimpleIterateMut {
-                    data: &mut data,
-                };
 
                 b.iter(|| {
-                    simple.run_rayon_scoped( |item| {
-                        item.item += 1;
+                    run_rayon_scoped(&mut data, |item| {
+                        *item += 1;
                     },threads);
                 })
             }
