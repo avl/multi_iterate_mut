@@ -329,10 +329,12 @@ It becomes very important that the application does not try to run with higher p
 the number of available cores. Trying to use MyPool2 with 12 threads on a 6 core machine will
 give absolutely horrifically bad performance. 
 
-What we really would want is cooperation with the operating system. We'd like to signal
-to the OS that we're one of 12 threads doing a lock-step job, and if we're in this particular
+I think what we really would want is cooperation with the operating system. Perhaps a mechanism
+where we can signal to the OS that we're one of 12 threads doing a lock-step job, and if we're in this particular
 loop over here, we're not really busy and if the OS decides to suspend any of the other threads
-it might just as well suspend all of the threads.  
+it might just as well suspend all of the threads.
+
+Anyone got a better idea?   
 
 #### Uneven Work-distribution
 Another major problem is that the crate as written will not distribute work evenly across threads.
