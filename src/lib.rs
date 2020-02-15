@@ -101,7 +101,7 @@ fn benchmark_non_threaded(bench: &mut Bencher) {
     let mut data = make_data();
     bench.iter(move || {
         for data in data.iter_mut() {
-            *data += 1;//data.item; //((data.item as f64*0.001).cos().cos().cos()*100.0) as usize;
+            *data += 1;
         }
     });
 }
