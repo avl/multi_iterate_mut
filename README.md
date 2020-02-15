@@ -357,7 +357,7 @@ I looked at scoped_threadpool, and it uses a big ol' mutex protecting a single w
 possible to make something where each task has a hint which describes which thread it prefers,
 and then use something like FUTEX_WAIT_BITSET/FUTEX_WAKE_BITSET on linux to selectively wake up
 the preferred thread. I haven't looked in to the details, and haven't checked if something
-similar exists on windows.
+similar exists on windows/mac/android/ios/etc.
 
 ### Closing remarks
 
