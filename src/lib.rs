@@ -9,6 +9,7 @@ extern crate arrayvec;
 
 mod mypool;
 pub mod mypool2;
+pub mod mypool3;
 
 #[cfg(test)]
 use test::Bencher;
@@ -64,7 +65,7 @@ pub fn run_mypool<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data:&mut
 }
 pub fn run_mypool2<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data: &mut [T], pool: &mut mypool2::Pool, f: F) {
     let thread_count = pool.thread_count() as usize;
-    let chunk_size = (data.len() + thread_count - 1) / thread_count;
+    let chunk_size = (data.len() + thread_count-1) / thread_count;
     let fref = &f;
 
 
@@ -76,7 +77,7 @@ pub fn run_mypool2<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data: &m
         };
         f
     }).collect();
-    pool.execute_all(&args);
+    pool.execute_all(args);
 }
 
 
