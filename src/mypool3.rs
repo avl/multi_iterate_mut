@@ -12,6 +12,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use arrayvec::ArrayVec;
 use std::cell::UnsafeCell;
 
+use std::intrinsics::copy_nonoverlapping;
+use std::marker::PhantomData;
+
+
 const MAX_THREADS:usize = 2;
 
 
@@ -20,17 +24,26 @@ pub struct AuxContext {
     cur_job1: AtomicUsize,
     cur_job2: AtomicUsize,
 
-    aux_raw_data_ptr: usize,
+    aux_chunk_size: usize,
     defer_stores: [DeferStore;MAX_THREADS],
     cur_aux_chunk: usize,
 
-
-
-
     own_sync_state: AtomicUsize,
     friend_sync_state: *const AtomicUsize,
-
 }
+
+pub struct AuxScheduler<A> {
+    aux_context: AuxContext,
+    pd: PhantomData<A>
+}
+
+impl<A:Send+Sync> AuxScheduler<A> {
+    fn schedule<FA: Fn(&mut A) + Send + Sync>(&mut self, aux_index: usize, f: FA) {
+        let aux_chunk =  aux_index / self.aux_context.aux_chunk_size;
+        self.aux_context.defer_stores[aux_chunk].add(aux_index,f);
+    }
+}
+
 
 unsafe impl Send for AuxContext {
 
@@ -41,11 +54,11 @@ unsafe impl Sync for AuxContext {
 
 
 impl AuxContext {
-    pub fn new(chunk_index:usize) -> AuxContext {
+    fn new(chunk_index:usize) -> AuxContext {
         AuxContext {
-            aux_raw_data_ptr: 0,
             cur_job1: AtomicUsize::new(0),
             cur_job2: AtomicUsize::new(0),
+            aux_chunk_size: 0,
             defer_stores: [
                 DeferStore::new(),
                 DeferStore::new(),
@@ -82,20 +95,85 @@ pub struct Pool {
 
 struct DeferStore {
     magic: Vec<usize>,
-
+    write_pointer: *mut u8,
 }
 
 impl DeferStore {
     pub fn new() -> DeferStore {
+        let mut rw = Vec::with_capacity(2048);
+        rw.resize(2048,0);
         DeferStore {
-            magic: Vec::with_capacity(2048)
+            write_pointer: rw.as_mut_ptr() as *mut u8,
+            magic: rw,
         }
     }
-    pub fn process(&mut self) {
-        // Stuff
+    pub fn add<A:Send+Sync,FA:Fn(&mut A)>(&mut self, aux_index: usize, f:FA) {
+        if std::mem::align_of::<FA>() > 8 {
+            panic!("Mem align of FA was > 8");
+        }
+        if std::mem::size_of::<FA>()%8 != 0 {
+            panic!("Size of of FA was not divisible by 8");
+        }
+        if std::mem::size_of::<usize>() != 8 {
+            panic!("Size of usize was !=8");
+        }
 
+        unsafe { copy_nonoverlapping(&aux_index as *const usize as *const u8,
+                                     self.write_pointer, 8) };
 
-        self.magic.clear();
+        self.write_pointer= self.write_pointer.wrapping_add(8);
+        let size = std::mem::size_of::<FA>();
+        unsafe { copy_nonoverlapping(&size as *const usize as *const u8,
+                                     self.write_pointer, 8) };
+        self.write_pointer= self.write_pointer.wrapping_add(8);
+
+        let fa_ptr = self.write_pointer;
+        unsafe { copy_nonoverlapping(&f as * const FA as *const usize as *const u8,
+                                     self.write_pointer, std::mem::size_of::<FA>()) };
+
+        self.write_pointer= self.write_pointer.wrapping_add((size+7)&!7);
+
+        let f_ptr: *mut dyn FnMut(&mut A) =
+            (fa_ptr as *mut FA) as *mut dyn FnMut(&mut A);
+        let f_ptr_data : (usize,usize) = unsafe  { std::mem::transmute(f_ptr) };
+
+        unsafe { copy_nonoverlapping(&f_ptr_data as *const (usize,usize) as *const u8,
+                                     self.write_pointer, 16) };
+
+        self.write_pointer= self.write_pointer.wrapping_add(16);
+        println!("Scheduled. Write pointer is now {:?}",self.write_pointer);
+        std::mem::forget(f);
+    }
+    pub fn process<A>(&mut self, aux:*mut A) {
+        let mut read_ptr = self.magic.as_ptr() as *const u8;
+        loop {
+            println!("Processing. Read_ptr = {:?}, write_pointer: {:?}",read_ptr,self.write_pointer);
+
+            if read_ptr != self.write_pointer as *const u8 {
+                debug_assert!(read_ptr < self.write_pointer);
+
+                let aux_index = unsafe  { (read_ptr as *const usize).read() } ;
+                read_ptr = read_ptr.wrapping_add(8);
+                let fa_size = unsafe  { (read_ptr as *const usize).read() } ;
+                read_ptr = read_ptr.wrapping_add(8);
+                if fa_size > 32 {
+                    panic!("fa_size too big");
+                }
+                read_ptr = read_ptr.wrapping_add((fa_size+7)&!7);
+
+                let f_ptr_data:(usize,usize) = unsafe  { (read_ptr as *const (usize,usize)).read() };
+                let f_ptr: *mut dyn Fn(&mut A) = unsafe  { std::mem::transmute(f_ptr_data) };
+                let f = unsafe{&*f_ptr};
+
+                read_ptr = read_ptr.wrapping_add(16);
+
+                println!("Reconstructured a closure to call. Calling it");
+                f(unsafe{&mut *aux.wrapping_add(aux_index)});
+            } else {
+                break;
+            }
+        }
+        self.write_pointer = self.magic.as_mut_ptr() as *mut u8;
     }
 }
 
@@ -123,10 +201,11 @@ impl Drop for Pool {
 
 impl Pool {
     #[inline]
-    pub fn execute_all<A:Send+Sync,T:Send+Sync,F:Fn(&mut [T], &mut AuxContext)+Send>(&mut self, data:&mut [T], aux: &mut [A],f:F) {
+    pub fn execute_all<A:Send+Sync,T:Send+Sync,F:Fn(&mut [T], &mut AuxScheduler<A>)+Send>(&mut self, data:&mut [T], aux: &mut [A],f:F) {
 
         let thread_count = MAX_THREADS;
         let chunk_size = (data.len() + thread_count-1) / thread_count;
+        let aux_chunk_size = (aux.len() + thread_count-1) / thread_count;
 
         println!("Executing with {} threads, chunk size = {}",thread_count,chunk_size);
 
@@ -140,11 +219,14 @@ impl Pool {
             avec.push(f);
         }
 
+        let aux_ptr = aux.as_mut_ptr();
+        let aux_ptr_usize = aux_ptr as usize;
 
         let mut debug_count = 0usize;
         for data_chunk in data_chunks_iterator {
             let fref = &f;
             add_chunk_processor(&mut chunk_processors, move|aux_context|{
+                let aux_ptr = aux_ptr_usize as *mut A;
 
                 let mut our_sync_counter = 0;
                 println!("Chunk processor {} starting",debug_count);
@@ -152,7 +234,7 @@ impl Pool {
                 for subchunk in data_chunk.chunks_mut(2048) {
 
                     println!("Chunk processor {} running subchunk",debug_count);
-                    fref(subchunk, aux_context);
+                    fref(subchunk, unsafe { std::mem::transmute(&mut *aux_context) } );
 
                     println!("Chunk processor {} waiting for friend to reach {}",debug_count,our_sync_counter);
                     loop {
@@ -162,31 +244,62 @@ impl Pool {
                         }
                     }
                     println!("Chunk processor {} friend ready",debug_count);
-                    aux_context.defer_stores[aux_context.cur_aux_chunk].process();
+                    aux_context.defer_stores[aux_context.cur_aux_chunk].process(aux_ptr);
                     our_sync_counter+=1;
                     println!("Chunk processor {} signalling {}",debug_count, our_sync_counter);
                     aux_context.own_sync_state.store(our_sync_counter, Ordering::SeqCst);
                     aux_context.cur_aux_chunk += 1;
+                    aux_context.cur_aux_chunk%=MAX_THREADS;
+                    panic!("Reduce code duplication, and test this!")
                 }
 
                 println!("Chunk processor {} done",debug_count);
+
+                for  _ in 0..MAX_THREADS {
+                    //TODO: Reduce code duplication here
+                    println!("Chunk processor {} waiting for friend to reach {}",debug_count,our_sync_counter);
+                    loop {
+                        let friend = unsafe{&*aux_context.friend_sync_state};
+                        if friend.load(Ordering::SeqCst) >= our_sync_counter {
+                            break;
+                        }
+                    }
+                    println!("Chunk processor {} friend ready",debug_count);
+                    aux_context.defer_stores[aux_context.cur_aux_chunk].process(aux_ptr);
+                    our_sync_counter+=1;
+                    println!("Chunk processor {} signalling {}",debug_count, our_sync_counter);
+                    aux_context.own_sync_state.store(our_sync_counter, Ordering::SeqCst);
+                    aux_context.cur_aux_chunk += 1;
+                    aux_context.cur_aux_chunk%=MAX_THREADS;
+
+                }
+
+
             });
             debug_count+=1;
         }
 
+        let mut cur_thread_num= 1;
         for (thread,arg) in self.threads.iter_mut().zip(chunk_processors.iter_mut().skip(1)) {
             let mut aux_context =  unsafe {&mut *thread.aux_context.get()};
-            aux_context.aux_raw_data_ptr = aux.as_mut_ptr() as usize;
+            aux_context.cur_aux_chunk = cur_thread_num;
+            aux_context.aux_chunk_size = aux_chunk_size;
             *aux_context.own_sync_state.get_mut()  = 0;
             let temp_f:&mut dyn FnOnce(&mut AuxContext) = arg;
             let runner_ref:(usize,usize) = unsafe { transmute ( temp_f as *mut dyn FnOnce(&mut AuxContext) ) };
             aux_context.cur_job1.store(runner_ref.0,Ordering::SeqCst);
             aux_context.cur_job2.store(runner_ref.1,Ordering::SeqCst);
             println!("Ordering run start of worker");
+            cur_thread_num  +=1;
         }
 
         {
             println!("Running main thread worker component");
+            self.first_aux_context.cur_aux_chunk = 0;
+            self.first_aux_context.aux_chunk_size = aux_chunk_size;
+            *self.first_aux_context.own_sync_state.get_mut() = 0;
+
+
             let first_f = &mut chunk_processors[0];
             (first_f)(&mut self.first_aux_context);
         }
@@ -291,23 +404,31 @@ impl Pool {
 
 #[test]
 pub fn mypool3_test1() {
-
+    do_mypool3_test1();
+}
+pub fn do_mypool3_test1() {
     let mut pool = Pool::new();
     let mut data = Vec::new();
     let mut aux = Vec::<usize>::new();
+    aux.push(42);
     for x in 0..MAX_THREADS {
         data.push(x);
     }
 
     pool.execute_all(&mut data, &mut aux,
-        |items, _ctx|
+        |items, ctx|
             {
                 for item in &mut items.iter_mut() {
                     *item += 1;
+                    ctx.schedule(0, |a|*a+=1);
                 }
             }
-
     );
+
+    assert_eq!(aux[0],44);
+    for (idx,item) in data.iter().enumerate() {
+        assert_eq!(idx+1, *item);
+    }
 
 
 }
