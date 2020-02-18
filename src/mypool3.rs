@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 
 
 const MAX_THREADS:usize = 2;
+const SUB_BATCH: usize = 2048;
 
 
 pub struct AuxContext {
@@ -231,10 +232,17 @@ impl Pool {
                 let mut our_sync_counter = 0;
                 println!("Chunk processor {} starting",debug_count);
 
-                for subchunk in data_chunk.chunks_mut(2048) {
-
-                    println!("Chunk processor {} running subchunk",debug_count);
-                    fref(subchunk, unsafe { std::mem::transmute(&mut *aux_context) } );
+                let mut sub = data_chunk.as_mut_ptr();
+                let iterations = (data_chunk.len()+SUB_BATCH-1) / SUB_BATCH + MAX_THREADS;
+                let mut len_remaining = data_chunk.len();
+                for _ in 0..iterations {
+                    let cur_len = len_remaining.min(SUB_BATCH);
+                    if len_remaining!=0 {
+                        println!("Chunk processor {} running subchunk {:?}",debug_count, sub);
+                        fref(unsafe{std::slice::from_raw_parts_mut(sub,cur_len)}, unsafe { std::mem::transmute(&mut *aux_context) } );
+                        sub = sub.wrapping_add(cur_len);
+                        len_remaining -= cur_len;
+                    }
 
                     println!("Chunk processor {} waiting for friend to reach {}",debug_count,our_sync_counter);
                     loop {
@@ -250,7 +258,15 @@ impl Pool {
                     aux_context.own_sync_state.store(our_sync_counter, Ordering::SeqCst);
                     aux_context.cur_aux_chunk += 1;
                     aux_context.cur_aux_chunk%=MAX_THREADS;
-                    panic!("Reduce code duplication, and test this!")
+
+                }
+                /*
+                for subchunk in data_chunk.chunks_mut(2048) {
+
+                    println!("Chunk processor {} running subchunk",debug_count);
+                    fref(subchunk, unsafe { std::mem::transmute(&mut *aux_context) } );
+
+                    //panic!("Reduce code duplication, and test this!")
                 }
 
                 println!("Chunk processor {} done",debug_count);
@@ -273,6 +289,7 @@ impl Pool {
                     aux_context.cur_aux_chunk%=MAX_THREADS;
 
                 }
+                */
 
 
             });
@@ -298,7 +315,6 @@ impl Pool {
             self.first_aux_context.cur_aux_chunk = 0;
             self.first_aux_context.aux_chunk_size = aux_chunk_size;
             *self.first_aux_context.own_sync_state.get_mut() = 0;
-
 
             let first_f = &mut chunk_processors[0];
             (first_f)(&mut self.first_aux_context);
@@ -432,3 +448,4 @@ pub fn do_mypool3_test1() {
 
 
 }
+compile_error!("Test more")
