@@ -45,7 +45,7 @@ impl Drop for Pool {
 
 impl Pool {
     #[inline]
-    pub fn execute_all<F:FnOnce()>(&mut self, mut args:ArrayVec<[F;12]>) {
+    pub fn execute_all<F:FnOnce()>(&mut self, mut args:ArrayVec<[F;8]>) {
         let arglen = args.len();
         if arglen == 0 {
             return;

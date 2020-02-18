@@ -15,8 +15,8 @@ pub mod mypool3;
 use test::Bencher;
 use arrayvec::ArrayVec;
 
-pub const PROB_SIZE: usize = 100_000;
-pub const THREADS: usize = 12;
+pub const PROB_SIZE: usize = 100000;
+pub const THREADS: usize = 8;
 
 pub fn run_rayon_scoped<T: Sync + Send, F: Fn(&mut T) + Send + Sync + 'static>(data: &mut [T], f: F, thread_count: usize) {
     let chunk_size = (data.len() + thread_count - 1) / thread_count;
