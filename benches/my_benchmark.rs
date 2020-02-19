@@ -10,6 +10,7 @@ pub fn pool2_benchmark(c: &mut Criterion) {
     for threads in [1usize,2].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(threads), threads, |b, &threads|
             {
+                println!("Thread: {}",threads);
                 let mut pool = Pool::new(threads);
                 let mut data = make_data();
 

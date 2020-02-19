@@ -7,6 +7,9 @@ extern crate crossbeam;
 extern crate core_affinity;
 extern crate arrayvec;
 
+#[macro_use]
+extern crate lazy_static;
+
 mod mypool;
 pub mod mypool2;
 pub mod mypool3;
