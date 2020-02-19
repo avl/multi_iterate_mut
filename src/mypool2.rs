@@ -120,7 +120,7 @@ impl Pool {
     }
     #[inline]
     pub fn thread_count(&self) -> usize {
-        self.scope.threads.len()
+        self.scope.threads.len()+1
     }
 }
 
