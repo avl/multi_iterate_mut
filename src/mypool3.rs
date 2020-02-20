@@ -225,7 +225,7 @@ impl Drop for Pool {
 
 impl Pool {
     #[inline]
-    pub fn execute_all<'a,A:Send+Sync,T:Send+Sync,F>(&mut self, data:&'a mut [T], aux: &'a mut [A],f:F) where
+    pub fn execute_all<'a,A:Send+Sync+'a,T:Send+Sync,F>(&mut self, data:&'a mut [T], aux: *mut A,f:F) where
         F: Fn(&'a mut [T], &mut AuxScheduler<'a,A>)+Send
     {
         if data.len() == 0 {
@@ -246,7 +246,7 @@ impl Pool {
                 store.magic.clear();
             }
             f(data,unsafe{std::mem::transmute(self.first_aux_context.as_mut())});
-            let aux_ptr = aux.as_mut_ptr();
+            let aux_ptr = aux;
 
             for defer_store in &mut self.first_aux_context.defer_stores {
                 defer_store.process(aux_ptr);
@@ -267,7 +267,7 @@ impl Pool {
             avec.push(f);
         }
 
-        let aux_ptr = aux.as_mut_ptr();
+        let aux_ptr = aux;
         let aux_ptr_usize = aux_ptr as usize;
 
         //let mut debug_count = 0usize;
@@ -467,7 +467,7 @@ pub fn do_mypool3_test1() {
         data.push(x);
     }
 
-    pool.execute_all(&mut data, &mut aux,
+    pool.execute_all(&mut data, aux.as_mut_ptr(),
         |items, ctx|
             {
                 for item in &mut items.iter_mut() {
@@ -637,7 +637,7 @@ pub fn fuzz_iteration(seed:u32){
 
     let start_time = Instant::now();
     let aux_chunk_size = (aux_size+pool.thread_count()-1) / pool.thread_count();
-    pool.execute_all(&mut data, &mut aux, |datas, ctx|{
+    pool.execute_all(&mut data, aux.as_mut_ptr(), |datas, ctx|{
         for (idx,x) in datas.iter_mut().enumerate() {
 
             let mut mutator = Mutator::new(rng,x,*x);
@@ -707,7 +707,7 @@ pub fn benchmark_mypool3_aux(bench: &mut Bencher) {
 
     let aux_chunk_size = (aux.len()+pool.thread_count()-1) / pool.thread_count();
     bench.iter(move || {
-        pool.execute_all(&mut data, &mut aux, |datas, ctx|{
+        pool.execute_all(&mut data, aux.as_mut_ptr(), |datas, ctx|{
             for (idx,x) in datas.iter_mut().enumerate() {
 
                 let aux_idx = ctx.aux_context.cur_data_offset+idx;
