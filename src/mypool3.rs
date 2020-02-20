@@ -204,13 +204,13 @@ impl Pool {
 
     fn exit(&mut self) {
         for thread in &mut self.threads {
-            println!("Sending quit command to thread {:?}",
-                     &unsafe{&*thread.aux_context.get()}.cur_job2 as *const AtomicUsize
-            );
+            //println!("Sending quit command to thread {:?}",
+                     //&unsafe{&*thread.aux_context.get()}.cur_job2 as *const AtomicUsize
+            //);
             unsafe{&*thread.aux_context.get()}.cur_job2.store(1, Ordering::SeqCst);
             thread.completion_receiver.recv().unwrap();
             thread.thread_id.take().unwrap().join().unwrap();
-            println!("Thread did join");
+            //println!("Thread did join");
         }
         self.threads.clear();
     }
@@ -222,6 +222,9 @@ impl Drop for Pool {
         self.exit();
     }
 }
+
+
+
 
 impl Pool {
     #[inline]
@@ -370,7 +373,7 @@ impl Pool {
         let mut v = Vec::new();
         let core_ids = CORES.clone();
 
-        println!("Num core_ids: {}: {:?}",core_ids.len(),core_ids);
+        //println!("Num core_ids: {}: {:?}",core_ids.len(),core_ids);
         assert!(core_ids.len() >= thread_count);
         let mut completion_senders = Vec::new();
         for i in 0..(thread_count-1) {
@@ -528,7 +531,7 @@ pub fn make_example_data() -> Vec<ExampleItem> {
             ..Default::default()
         });
     }
-    println!("Made data {}",data[0].data);
+    //println!("Made data {}",data[0].data);
     data
 }
 
@@ -627,7 +630,7 @@ pub fn fuzz_iteration(seed:u32){
     let mut rng = XorRng::new(seed);
     let data_size = gen_size(&mut rng);
     let aux_size = gen_size(&mut rng);
-    println!("Fuzzing data size {:?}, aux: {:?}, seed: {:?}",data_size,aux_size,seed);
+    //println!("Fuzzing data size {:?}, aux: {:?}, seed: {:?}",data_size,aux_size,seed);
 
     let mut data = gen_data(&mut rng,data_size);
     let mut aux = gen_data(&mut rng,aux_size);
@@ -640,13 +643,14 @@ pub fn fuzz_iteration(seed:u32){
     pool.execute_all(&mut data, aux.as_mut_ptr(), |datas, ctx|{
         for (idx,x) in datas.iter_mut().enumerate() {
 
-            let mut mutator = Mutator::new(rng,x,*x);
+            let mut mutator = Mutator::new(rng,x,idx as u64);
             {
                 if let Some(aux_idx) = mutator.aux_item(aux_size) {
                     ctx.schedule((aux_idx as usize/aux_chunk_size) as u32, move|auxitem|{
                         mutator.mutate(unsafe{&mut *auxitem.wrapping_add(aux_idx)});
                     });
                     ctx.schedule((aux_idx as usize/aux_chunk_size) as u32, move|auxitem|{
+
                         mutator.mutate(unsafe{&mut *auxitem.wrapping_add(aux_idx)});
                     });
                 }
@@ -654,7 +658,7 @@ pub fn fuzz_iteration(seed:u32){
         }
     });
 
-    println!("Time taken: {:?}", Instant::now() - start_time);
+    //println!("Time taken: {:?}", Instant::now() - start_time);
 
     let chunk_size = (data2.len() + MAX_THREADS-1) / MAX_THREADS;
 
@@ -663,7 +667,7 @@ pub fn fuzz_iteration(seed:u32){
 
             for (idx,x) in datas.iter_mut().enumerate() {
 
-                let mut mutator = Mutator::new(rng,x,*x);
+                let mut mutator = Mutator::new(rng,x,idx as u64);
                 {
                     let mut mut2 = mutator.clone();
                     if let Some(aux_idx) = mutator.aux_item(aux_size) {
