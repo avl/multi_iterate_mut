@@ -61,9 +61,8 @@ pub struct AuxScheduler<'a, A> {
 }
 
 impl<'a, A:Send+Sync> AuxScheduler<'a, A> {
-    fn schedule<FA: FnOnce(&mut A) + Send + Sync +'a>(&mut self, aux_index: usize, f: FA) {
-        let aux_chunk =  aux_index / self.aux_context.aux_chunk_size;
-        self.aux_context.defer_stores[aux_chunk].add(aux_index,f);
+    fn schedule<FA: FnOnce(*mut A) + Send + Sync +'a>(&mut self, channel: u32, f: FA) {
+        self.aux_context.defer_stores[channel as usize].add(f);
     }
 }
 
@@ -120,7 +119,7 @@ impl DeferStore {
             magic: rw,
         }
     }
-    pub fn add<A:Send+Sync,FA:FnOnce(&mut A)>(&mut self, aux_index: usize, f:FA) {
+    pub fn add<A:Send+Sync,FA:FnOnce(*mut A)>(&mut self, f:FA) {
         if std::mem::align_of::<FA>() > 8 {
             panic!("Mem align of FA was > 8");
         }
@@ -130,17 +129,13 @@ impl DeferStore {
         if std::mem::size_of::<usize>() != 8 {
             panic!("Size of usize was !=8");
         }
-        let tot_size = 1usize+1+(std::mem::size_of::<FA>()+7)/8 + 1;
+        let tot_size = 1usize+(std::mem::size_of::<FA>()+7)/8 + 1;
         if self.magic.len() + tot_size > self.magic.capacity() {
             panic!("Ran out of space for closures");
         }
 
         let mut write_pointer = self.magic.as_mut_ptr().wrapping_add(self.magic.len()) as *mut u8;
 
-        unsafe { copy_nonoverlapping(&aux_index as *const usize as *const u8,
-                                     write_pointer, 8) };
-
-        write_pointer= write_pointer.wrapping_add(8);
         let size = std::mem::size_of::<FA>();
         unsafe { copy_nonoverlapping(&size as *const usize as *const u8,
                                      write_pointer, 8) };
@@ -152,8 +147,8 @@ impl DeferStore {
 
         write_pointer= write_pointer.wrapping_add((size+7)&!7);
 
-        let f_ptr: *mut dyn FnOnce(&mut A) =
-            (fa_ptr as *mut FA) as *mut dyn FnOnce(&mut A);
+        let f_ptr: *mut dyn FnOnce(*mut A) =
+            (fa_ptr as *mut FA) as *mut dyn FnOnce(*mut A);
         let f_ptr_data : (usize,usize) = unsafe  { std::mem::transmute(f_ptr) };
 
         assert_eq!(f_ptr_data.0, fa_ptr as usize);
@@ -176,8 +171,8 @@ impl DeferStore {
             if read_ptr != write_pointer as *const u8 {
                 debug_assert!(read_ptr < write_pointer);
 
-                let aux_index = unsafe  { (read_ptr as *const usize).read() } ;
-                read_ptr = read_ptr.wrapping_add(8);
+                //let aux_index = unsafe  { (read_ptr as *const usize).read() } ;
+                //read_ptr = read_ptr.wrapping_add(8);
                 let fa_size = unsafe  { (read_ptr as *const usize).read() } ;
                 read_ptr = read_ptr.wrapping_add(8);
                 if fa_size > 32 {
@@ -188,13 +183,13 @@ impl DeferStore {
 
                 let f_ptr_data:(usize,usize) = unsafe  { (fa_ptr as usize, (read_ptr as *const usize).read()) };
                 //assert_eq!(f_ptr_data.0,fa_ptr as usize);
-                let f_ptr: *mut dyn Fn(&mut A) = unsafe  { std::mem::transmute(f_ptr_data) };
+                let f_ptr: *mut dyn Fn(*mut A) = unsafe  { std::mem::transmute(f_ptr_data) };
                 let f = unsafe{&*f_ptr};
 
                 read_ptr = read_ptr.wrapping_add(8);
 
                 //println!("Reconstructured a closure to call. Calling it");
-                f(unsafe{&mut *aux.wrapping_add(aux_index)});
+                f(aux);
             } else {
                 break;
             }
@@ -238,14 +233,14 @@ impl Pool {
         }
         let thread_count = MAX_THREADS;
         let chunk_size = (data.len() + thread_count-1) / thread_count;
-        let aux_chunk_size = (aux.len() + thread_count-1) / thread_count;
+        //let aux_chunk_size = (aux.len() + thread_count-1) / thread_count;
 
         if data.len()<256 || chunk_size*(MAX_THREADS-1) >= data.len() {
             //The ammount of work compared to the threads is such that if work is evenly divided,
             //we'll not actually use all threads.
             //Example: 8 threads, 9 pieces of work. 1 piece per thread => not enough. Two per threads => 16 units of work => only 5 threads actually have work.
             self.first_aux_context.cur_aux_chunk = 0;
-            self.first_aux_context.aux_chunk_size = aux_chunk_size;
+          //  self.first_aux_context.aux_chunk_size = aux_chunk_size;
             *self.first_aux_context.own_sync_state.0.get_mut() = 0;
             for store in self.first_aux_context.defer_stores.iter_mut() {
                 store.magic.clear();
@@ -329,7 +324,7 @@ impl Pool {
         for (thread,arg) in self.threads.iter_mut().zip(chunk_processors.iter_mut().skip(1)) {
             let mut aux_context =  unsafe {&mut *thread.aux_context.get()};
             aux_context.cur_aux_chunk = cur_thread_num;
-            aux_context.aux_chunk_size = aux_chunk_size;
+            //aux_context.aux_chunk_size = aux_chunk_size;
             aux_context.cur_nominal_chunk_size  = chunk_size;
             for store in aux_context.defer_stores.iter_mut() {
                 store.magic.clear();
@@ -346,7 +341,7 @@ impl Pool {
         {
             //println!("Running main thread worker component");
             self.first_aux_context.cur_aux_chunk = 0;
-            self.first_aux_context.aux_chunk_size = aux_chunk_size;
+            //self.first_aux_context.aux_chunk_size = aux_chunk_size;
             self.first_aux_context.cur_nominal_chunk_size  = chunk_size;
             *self.first_aux_context.own_sync_state.0.get_mut() = 0;
             for store in self.first_aux_context.defer_stores.iter_mut() {
@@ -477,7 +472,7 @@ pub fn do_mypool3_test1() {
             {
                 for item in &mut items.iter_mut() {
                     *item += 1;
-                    ctx.schedule(0, |a|*a+=1);
+                    ctx.schedule(0,|aux| *unsafe{&mut *aux.wrapping_add(0)}+=1);
                 }
             }
     );
@@ -641,17 +636,18 @@ pub fn fuzz_iteration(seed:u32){
     let mut aux2 = aux.clone();
 
     let start_time = Instant::now();
+    let aux_chunk_size = (aux_size+pool.thread_count()-1) / pool.thread_count();
     pool.execute_all(&mut data, &mut aux, |datas, ctx|{
         for (idx,x) in datas.iter_mut().enumerate() {
 
             let mut mutator = Mutator::new(rng,x,*x);
             {
                 if let Some(aux_idx) = mutator.aux_item(aux_size) {
-                    ctx.schedule(aux_idx as usize, move|auxitem|{
-                        mutator.mutate(auxitem);
+                    ctx.schedule((aux_idx as usize/aux_chunk_size) as u32, move|auxitem|{
+                        mutator.mutate(unsafe{&mut *auxitem.wrapping_add(aux_idx)});
                     });
-                    ctx.schedule(aux_idx as usize, move|auxitem|{
-                        mutator.mutate(auxitem);
+                    ctx.schedule((aux_idx as usize/aux_chunk_size) as u32, move|auxitem|{
+                        mutator.mutate(unsafe{&mut *auxitem.wrapping_add(aux_idx)});
                     });
                 }
             }
@@ -709,6 +705,7 @@ pub fn benchmark_mypool3_aux(bench: &mut Bencher) {
     let mut data = make_example_data();
     let mut aux = make_example_data();
 
+    let aux_chunk_size = (aux.len()+pool.thread_count()-1) / pool.thread_count();
     bench.iter(move || {
         pool.execute_all(&mut data, &mut aux, |datas, ctx|{
             for (idx,x) in datas.iter_mut().enumerate() {
@@ -716,9 +713,9 @@ pub fn benchmark_mypool3_aux(bench: &mut Bencher) {
                 let aux_idx = ctx.aux_context.cur_data_offset+idx;
                 let temp_ref = &x.data;
                 {
-                    ctx.schedule(aux_idx as usize, move|auxitem|{
-
-                        auxitem.data += *temp_ref as u64;
+                    ctx.schedule((aux_idx as usize/aux_chunk_size) as u32, move|auxitem|{
+                        let item = unsafe{&mut *auxitem.wrapping_add(aux_idx)};
+                        item.data += *temp_ref as u64;
                     })
                 }
             }
