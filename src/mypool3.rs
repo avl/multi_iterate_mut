@@ -130,7 +130,7 @@ impl DeferStore {
         if std::mem::size_of::<usize>() != 8 {
             panic!("Size of usize was !=8");
         }
-        let tot_size = 1usize+1+(std::mem::size_of::<FA>()+7)/8 + 2;
+        let tot_size = 1usize+1+(std::mem::size_of::<FA>()+7)/8 + 1;
         if self.magic.len() + tot_size > self.magic.capacity() {
             panic!("Ran out of space for closures");
         }
@@ -158,8 +158,8 @@ impl DeferStore {
 
         assert_eq!(f_ptr_data.0, fa_ptr as usize);
 
-        unsafe { copy_nonoverlapping(&f_ptr_data as *const (usize,usize) as *const u8,
-                                     write_pointer, 16) };
+        unsafe { copy_nonoverlapping(&f_ptr_data.1 as *const usize as *const u8,
+                                     write_pointer, 8) };
 
         //write_pointer= write_pointer.wrapping_add(16);
         unsafe { self.magic.set_len(self.magic.len()+tot_size) };
@@ -183,13 +183,15 @@ impl DeferStore {
                 if fa_size > 32 {
                     panic!("fa_size too big");
                 }
-                read_ptr = read_ptr.wrapping_add((fa_size+7)&!7);
+                let fa_ptr = read_ptr;
+                read_ptr = read_ptr.wrapping_add(((fa_size+7)&!7));
 
-                let f_ptr_data:(usize,usize) = unsafe  { (read_ptr as *const (usize,usize)).read() };
+                let f_ptr_data:(usize,usize) = unsafe  { (fa_ptr as usize, (read_ptr as *const usize).read()) };
+                //assert_eq!(f_ptr_data.0,fa_ptr as usize);
                 let f_ptr: *mut dyn Fn(&mut A) = unsafe  { std::mem::transmute(f_ptr_data) };
                 let f = unsafe{&*f_ptr};
 
-                read_ptr = read_ptr.wrapping_add(16);
+                read_ptr = read_ptr.wrapping_add(8);
 
                 //println!("Reconstructured a closure to call. Calling it");
                 f(unsafe{&mut *aux.wrapping_add(aux_index)});
