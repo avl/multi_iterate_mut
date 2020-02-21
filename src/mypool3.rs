@@ -725,6 +725,7 @@ pub fn execute_all<'a, T: Send + Sync, A1: Send + Sync, F: for<'b> Fn(usize, &'a
         }
     });
 }
+compile_error!("Fix ergonomic functionality for multiple aux vectors");
 
 pub fn fuzz_iteration(seed: u32) {
     let mut pool = Pool::new();
@@ -918,9 +919,9 @@ pub fn benchmark_mypool3_double_aux(bench: &mut Bencher) {
         pool.execute_all(dataref, DoublePtrHolder::new(auxref1, auxref2), move |datas, ctx| {
             for (idx, x) in datas.iter_mut().enumerate() {
                 let aux_idx = ctx.aux_context.cur_data_offset + idx;
-                let temp_ref = &x.data;
+                //let temp_ref = &x.data;
                 {
-                    ctx.get_ah().schedule1(ctx, aux_idx, move |data| data.data += *temp_ref);
+                    ctx.get_ah().schedule1(ctx, aux_idx, move |data| data.data += 1);
                 }
             }
         });
