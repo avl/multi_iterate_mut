@@ -141,9 +141,9 @@ impl DeferStore {
 
         let mut write_pointer = self.magic.as_mut_ptr().wrapping_add(self.magic.len());
 
-        let size = std::mem::size_of::<FA>();
+        let size = (std::mem::size_of::<FA>() + 7) / 8;
         unsafe {
-            write_pointer.write(size);
+            write_pointer.write(size<<3);
             /*copy_nonoverlapping(&size as *const usize,
                                 write_pointer, 1)*/
         };
@@ -155,7 +155,7 @@ impl DeferStore {
                                 write_pointer as *mut u8, std::mem::size_of::<FA>())
         };
 
-        write_pointer = write_pointer.wrapping_add((size + 7) >>3);
+        write_pointer = write_pointer.wrapping_add(size);
 
         let f_ptr: *mut dyn FnOnce(AH) =
             (fa_ptr as *mut FA) as *mut dyn FnOnce(AH);
