@@ -1,3 +1,4 @@
+/*
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
 
 use multi_iterate_mut::{run_rayon_scoped, run_mypool2};
@@ -48,3 +49,4 @@ pub fn rayon_benchmark(c: &mut Criterion) {
 criterion_group!(pool2_benches, pool2_benchmark);
 criterion_group!(rayon_benches, rayon_benchmark);
 criterion_main!(pool2_benches, rayon_benches);
+*/

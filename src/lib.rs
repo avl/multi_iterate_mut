@@ -17,6 +17,9 @@ pub mod mypool3;
 #[cfg(test)]
 use test::Bencher;
 use arrayvec::ArrayVec;
+#[cfg(test)]
+use std::ops::DerefMut;
+
 
 pub const PROB_SIZE: usize = 100000;
 pub const THREADS: usize = 8;
@@ -66,6 +69,8 @@ pub fn run_mypool<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data:&mut
         }
     });
 }
+
+
 pub fn run_mypool2<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data: &mut [T], pool: &mut mypool2::Pool, f: F) {
     let thread_count = pool.thread_count() as usize;
     let chunk_size = (data.len() + thread_count-1) / thread_count;
@@ -156,5 +161,54 @@ fn benchmark_mypool2(bench: &mut Bencher) {
 }
 
 
+#[bench]
+pub fn benchmark_aux_locking(bench: &mut Bencher) {
+    let mut pool = mypool2::Pool::new(THREADS);
+    let mut data = make_data();
+    use parking_lot::Mutex;
+    let thread_count = pool.thread_count();
+    let chunk_size = (data.len() + thread_count-1) / thread_count;
 
+    let aux:Vec<Mutex<u64>> = make_data().drain(..).map(|x|Mutex::new(x)).collect();
+
+
+    let auxref = &aux;
+    bench.iter(move || {
+
+        let args: ArrayVec<[_; THREADS]> = data.chunks_mut(chunk_size).map(|datachunk_items| {
+            let f = move|| {
+                for item in datachunk_items.iter_mut() {
+                    let mut guard = auxref[*item as usize].lock();
+                    *guard.deref_mut() += 1;
+                }
+            };
+            f
+        }).collect();
+        pool.execute_all(args);
+
+    });
+}
+
+#[bench]
+pub fn benchmark_aux_rayon_locking(bench:&mut Bencher) {
+    let mut data = make_data();
+    let thread_count = THREADS;
+    let chunk_size = (data.len() + thread_count - 1) / thread_count;
+    use parking_lot::Mutex;
+    let aux:Vec<Mutex<u64>> = make_data().drain(..).map(|x|Mutex::new(x)).collect();
+    let auxref = &aux;
+    bench.iter(move || {
+        rayon::scope(|s| {
+            for datachunk_items in data.chunks_mut(chunk_size) {
+                s.spawn(|_| {
+                    for item in datachunk_items {
+                        let tid = *item as usize;
+                        let mut guard = auxref[tid].lock();
+                        *guard.deref_mut() += 1;
+                    }
+                });
+            }
+        });
+    });
+}
 
