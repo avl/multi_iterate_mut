@@ -1,5 +1,6 @@
 #![feature(test)]
 #![deny(warnings)]
+#![feature(asm)]
 extern crate scoped_threadpool;
 extern crate test;
 extern crate rayon;
@@ -186,6 +187,24 @@ pub fn benchmark_aux_locking(bench: &mut Bencher) {
         }).collect();
         pool.execute_all(args);
 
+    });
+}
+
+#[bench]
+pub fn benchmark_aux_singlethreaded(bench: &mut Bencher) {
+    let mut data = make_data();
+
+    let mut aux:Vec<u64> = make_data();
+
+
+    bench.iter(move || {
+
+        let mut sum=0;
+        for (idx,data) in data.iter_mut().enumerate() {
+            sum+=*data;
+            aux[idx] = aux[idx].wrapping_add(1);
+        }
+        sum
     });
 }
 

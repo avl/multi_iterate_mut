@@ -20,12 +20,12 @@ use test::Bencher;
 #[cfg(test)]
 use crate::make_data;
 use crate::PROB_SIZE;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 
 const MAX_THREADS: usize = 8;
-const SUB_BATCH: usize = 4096;
-const MAX_CLOSURE_COUNT: usize = SUB_BATCH * MAX_THREADS;
+const SUB_BATCH: usize = 64;
+const MAX_CLOSURE_COUNT: usize = 8*SUB_BATCH * MAX_THREADS;
 
 #[repr(align(64))]
 struct SyncStateInOwnCacheline(AtomicUsize);
@@ -185,8 +185,8 @@ impl DeferStore {
 
                 let fa_size = unsafe { (read_ptr as *const usize).read() };
                 read_ptr = read_ptr.wrapping_add(8);
-                if fa_size > 32 {
-                    panic!("fa_size too big");
+                if fa_size > 64 {
+                    panic!("fa_size too big: {}",fa_size);
                 }
                 let fa_ptr = read_ptr;
                 read_ptr = read_ptr.wrapping_add(fa_size);
@@ -343,9 +343,10 @@ impl Pool {
                 let mut len_remaining = data_chunk.len();
                 let mut debug_wait_cycles = 0usize;
                 let mut iteration = 0;
-                let mut cur_sub_batch_size =SUB_BATCH;
+
                 while iteration < iterations {
-                    let cur_len = len_remaining.min(cur_sub_batch_size);
+                    let cur_len = len_remaining.min(SUB_BATCH);
+
                     if len_remaining != 0 {
                         //println!("Chunk processor {} running subchunk {:?}",debug_count, sub);
                         let aux_cont = unsafe { std::mem::transmute(&mut *aux_context) };
@@ -356,6 +357,7 @@ impl Pool {
                     }
 
                     //println!("Chunk processor {} waiting for friend to reach {}",debug_count,our_sync_counter);
+
                     loop {
                         let friend = unsafe { &*aux_context.friend_sync_state };
                         /*println!("#{}: Waiting for friend to reach {}, we have reached {} (our state: {:?}, theirs: {:?})",debug_count, our_sync_counter, our_sync_counter,
@@ -370,16 +372,17 @@ impl Pool {
                             aux_context.cur_aux_chunk += 1;
                             aux_context.cur_aux_chunk %= MAX_THREADS;
                             iteration += 1;
-                            cur_sub_batch_size=SUB_BATCH;
                             break;
                         }
-                        
+                        /*if len_remaining!=0 {
+                            break;
+                        }*/
                         {
                             debug_wait_cycles+=1;
                         }
 
                     }
-                    //println!("Chunk processor {} friend ready",debug_count);
+                    //println!("Chunk processor {} friend ready",debug_count, debug_wait_cycles);
                 }
                 //println!("#{}: Total wait cycles: {} for selected iteration / {}",debug_count,debug_wait_cycles,iterations);
             });
@@ -583,8 +586,8 @@ pub fn benchmark_mypool3_singular(bench: &mut Bencher) {
 #[derive(Default)]
 pub struct ExampleItem {
     data: u64,
-    big1: [u64; 32],
-    big2: [u64; 32],
+    //big1: [u64; 32],
+    //big2: [u64; 32],
 }
 
 pub fn make_example_data() -> Vec<ExampleItem> {
@@ -619,6 +622,10 @@ impl XorRng {
         XorRng {
             state: if seed == 0 { 0xffff_ffff } else { seed }
         }
+    }
+
+    pub fn mix_in(&mut self, seed:u32) {
+        self.state ^= seed;
     }
 
     pub fn gen(&mut self) -> u32 {
@@ -683,11 +690,11 @@ impl<'a> Mutator<'a> {
 
 pub fn check_eq(a: &Vec<u64>, b: &Vec<u64>) {
     if a.len() != b.len() {
-        panic!("Lengths differ {} vs {}", a.len(), b.len());
+        panic!("Lengths differ {} vs should be {}", a.len(), b.len());
     }
     for (idx, (a, b)) in a.iter().zip(b.iter()).enumerate() {
         if *a != *b {
-            panic!("Contents differ at index #{}: {} vs {}", idx, *a, *b);
+            panic!("Contents differ at index #{}: {} vs should be {}", idx, *a, *b);
         }
     }
 }
@@ -734,17 +741,28 @@ pub fn fuzz_iteration(seed: u32) {
 
     let start_time = Instant::now();
     let aux_chunk_size = (aux_size + pool.thread_count() - 1) / pool.thread_count();
+    let auxlen = aux.len();
 
     execute_all(&mut pool, &mut data, &mut aux, move |idx, x, mut ctx| {
+        let mut rng = rng;
+        rng.mix_in(idx as u32);
         let mut mutator = Mutator::new(rng, x, idx as u64);
+
         if let Some(aux_idx) = mutator.aux_item(aux_size) {
+            //println!("For item: {}, mutating item {}",idx,aux_idx);
+            //let mut mut2 = mutator.clone();
+            //mut2.rng.mix_in(42);
             ctx.schedule(aux_idx, move |auxitem| {
+
                 mutator.mutate(auxitem)
+                //println!("under test Assigning 42 to {}",aux_idx);
+                //*auxitem=42;
             });
-            ctx.schedule(aux_idx, move |auxitem| {
-                mutator.mutate(auxitem)
-            });
+            /*ctx.schedule(aux_idx, move |auxitem| {
+                mut2.mutate(auxitem)
+            });*/
         }
+
     });
 
     //println!("Time taken: {:?}", Instant::now() - start_time);
@@ -752,18 +770,25 @@ pub fn fuzz_iteration(seed: u32) {
     let chunk_size = (data2.len() + MAX_THREADS - 1) / MAX_THREADS;
 
     if chunk_size != 0 {
+        let mut idx=0;
         for datas in data.chunks_mut(chunk_size) {
-            for (idx, x) in datas.iter_mut().enumerate() {
+            for x in datas.iter_mut() {
+
+                let mut rng = rng;
+                rng.mix_in(idx as u32);
                 let mut mutator = Mutator::new(rng, x, idx as u64);
                 {
-                    let mut mut2 = mutator.clone();
                     if let Some(aux_idx) = mutator.aux_item(aux_size) {
-                        mutator.mutate(&mut aux[aux_idx]);
-                    }
-                    if let Some(aux_idx) = mut2.aux_item(aux_size) {
-                        mut2.mutate(&mut aux[aux_idx]);
+                        //aux2[aux_idx] = 42;
+                        //println!("Correct Assigning 42 to {}",aux_idx);
+                        //let mut mut2 = mutator.clone();
+                        //mut2.rng.mix_in(42);
+
+                        mutator.mutate(&mut aux2[aux_idx]);
+                        //mut2.mutate(&mut aux[aux_idx]);
                     }
                 }
+                idx+=1;
             }
         }
     }
@@ -826,14 +851,12 @@ pub fn benchmark_mypool3_aux_new(bench: &mut Bencher) {
     let aux_chunk_size = (aux.len() + pool.thread_count() - 1) / pool.thread_count();
     bench.iter(move || {
         execute_all(&mut pool, &mut data, &mut aux,
-                    move |idx, x, mut ctx| {
-                        let xref = &x.data;
-
-                        ctx.schedule(idx,
-                                     move |auxitem| {
-                                         auxitem.data += *xref;
-                                     });
-                    });
+            move |idx, x, mut ctx| {
+                ctx.schedule(idx,
+                             move |auxitem| {
+                                 auxitem.data += 1;
+                             });
+            });
     });
 }
 
