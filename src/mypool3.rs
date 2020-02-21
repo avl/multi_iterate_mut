@@ -62,7 +62,7 @@ pub struct AuxScheduler<'a, A> {
 }
 
 impl<'a, AH:AuxHolder> AuxScheduler<'a, AH> {
-    fn schedule<FA: FnOnce(AH) + Send + Sync +'a>(&mut self, channel: u32, f: FA) {
+    fn schedule<'b,FA: FnOnce(AH) + Send + Sync +'b>(&'b mut self, channel: u32, f: FA) {
         self.aux_context.defer_stores[channel as usize].add(f);
     }
     fn get_ah(&self) -> AH {
@@ -232,38 +232,52 @@ pub trait AuxHolder : Send + Sync {
     fn cheap_copy(&self) -> Self;
 }
 
-struct PtrHolder<T> {
+struct PtrHolder<'a,T> {
     t: usize, //*mut T
-    pd: PhantomData<T>
+    chunksize:usize,
+    pd: PhantomData<(&'a T)>
 }
-impl<T> PtrHolder<T> {
+impl<'a,T:Send+Sync> AuxHolder for PtrHolder<'a,T> {
+    fn cheap_copy(&self) -> Self {
+        PtrHolder {
+            t:self.t,
+            chunksize:self.chunksize,
+            pd: PhantomData,
+        }
+    }
+}
+impl<'a,T:Send+Sync> PtrHolder<'a,T> {
 
     #[inline]
     pub fn get(&self, index:usize) -> &mut T {
         unsafe {&mut *(self.t as *mut T).wrapping_add(index)}
     }
     #[inline]
-    pub fn new(input:&mut [T]) -> PtrHolder<T> {
+    pub fn new(input:&'a mut [T],thread_count:usize) -> PtrHolder<T> {
         PtrHolder {
             t: input.as_mut_ptr() as usize,
+            chunksize: (input.len()+thread_count-1)/thread_count,
             pd: PhantomData
         }
+    }
+
+    fn get1(&mut self, index:usize) -> &mut T {
+        unsafe {&mut *(self.t as *mut T).wrapping_add(index)}
+    }
+
+    pub fn schedule1<'b,F:FnOnce(&mut T)+Sync+Send+'b>(&self, ctx:&'b mut AuxScheduler<PtrHolder<'a,T>>, index:usize, f:F )
+    {
+        ctx.schedule((index as usize/self.chunksize) as u32, move|mut auxitem|{
+            f(unsafe{(auxitem).get1(index)})
+        })
     }
 }
 
-impl<T:Send+Sync> AuxHolder for PtrHolder<T> {
-    fn cheap_copy(&self) -> Self {
-        PtrHolder {
-            t: self.t,
-            pd: PhantomData
-        }
-    }
-}
 
 impl Pool {
     #[inline]
     pub fn execute_all<'a,AH:'a+AuxHolder ,T:Send+Sync,F>(&mut self, data:&'a mut [T], mut aux: AH,f:F) where
-        F: Fn(&'a mut [T], &mut AuxScheduler<'a,AH>)+Send
+        F: Fn(&'a mut [T], &mut AuxScheduler<'a,AH>)+Send+'a
     {
         if data.len() == 0 {
             return;
@@ -508,7 +522,7 @@ pub fn do_mypool3_test1() {
     }
 
 
-    pool.execute_all(&mut data, PtrHolder::new(&mut aux),
+    pool.execute_all(&mut data, PtrHolder::new(&mut aux, pool.thread_count()),
         |items, ctx|
             {
                 for item in &mut items.iter_mut() {
@@ -531,7 +545,7 @@ pub fn benchmark_mypool3_simple(bench: &mut Bencher) {
     let mut data = make_data();
     let mut aux = Vec::<u64>::new();
     bench.iter(move || {
-        pool.execute_all(&mut data, PtrHolder::new(&mut aux), |datas, _ctx|{
+        pool.execute_all(&mut data, PtrHolder::new(&mut aux, pool.thread_count()), |datas, _ctx|{
            for x in datas.iter_mut() {
                *x+=1;
            }
@@ -545,7 +559,7 @@ pub fn benchmark_mypool3_singular(bench: &mut Bencher) {
     let mut data = vec![1u64];
     let mut aux = Vec::<u64>::new();
     bench.iter(move || {
-        pool.execute_all(&mut data, PtrHolder::new(&mut aux), |datas, _ctx|{
+        pool.execute_all(&mut data, PtrHolder::new(&mut aux, pool.thread_count()), |datas, _ctx|{
             for x in datas.iter_mut() {
                 *x+=1;
             }
@@ -663,6 +677,30 @@ pub fn check_eq(a:&Vec<u64>,b:&Vec<u64>){
         }
     }
 }
+
+
+pub struct Context<'a,'b,T> {
+    ptr_holder: &'b mut AuxScheduler<'a,PtrHolder<'a,T>>
+}
+impl<'a,'b,T:Send+Sync> Context<'a,'b,T> {
+    pub fn schedule<F:FnOnce(&mut T)+Send+Sync+'b>(&mut self, index:usize, f:F) {
+        self.ptr_holder.get_ah().schedule1(self.ptr_holder, index,f)
+    }
+}
+
+pub fn execute_all<'a,T:Send+Sync,A1:Send+Sync,F:for<'b> Fn(usize,&'a mut T, Context<'a,'b,A1>)+'a+Send+Sync>(pool: &mut Pool, data:&'a mut Vec<T>, aux1: &'a mut Vec<A1>, f:F )  {
+
+    pool.execute_all(data, PtrHolder::new(aux1, pool.thread_count()), move|datas, ctx|{
+        for (idx,x) in datas.iter_mut().enumerate() {
+
+            let mycontext = Context {
+                ptr_holder: ctx
+            };
+            f(idx,x,mycontext);
+        }
+    });
+}
+
 pub fn fuzz_iteration(seed:u32){
     let mut pool = Pool::new();
     let mut rng = XorRng::new(seed);
@@ -678,23 +716,36 @@ pub fn fuzz_iteration(seed:u32){
 
     let start_time = Instant::now();
     let aux_chunk_size = (aux_size+pool.thread_count()-1) / pool.thread_count();
-    pool.execute_all(&mut data, PtrHolder::new(&mut aux), |datas, ctx|{
+
+        execute_all(&mut pool, &mut data, &mut aux, move|idx,x,mut ctx|{
+        let mut mutator = Mutator::new(rng,x,idx as u64);
+        if let Some(aux_idx) = mutator.aux_item(aux_size) {
+            ctx.schedule(aux_idx,move|auxitem|{
+                mutator.mutate(auxitem)
+            });
+            ctx.schedule(aux_idx,move|auxitem|{
+                mutator.mutate(auxitem)
+            });
+        }
+    });
+    /*
+    pool.execute_all(&mut data, PtrHolder::new(&mut aux, pool.thread_count()), |datas, ctx|{
         for (idx,x) in datas.iter_mut().enumerate() {
 
             let mut mutator = Mutator::new(rng,x,idx as u64);
-            {
-                if let Some(aux_idx) = mutator.aux_item(aux_size) {
-                    ctx.schedule((aux_idx as usize/aux_chunk_size) as u32, move|auxitem|{
-                        mutator.mutate({(auxitem).get(aux_idx)});
-                    });
-                    ctx.schedule((aux_idx as usize/aux_chunk_size) as u32, move|auxitem|{
 
-                        mutator.mutate({(auxitem).get(aux_idx)});
-                    });
-                }
+
+            if let Some(aux_idx) = mutator.aux_item(aux_size) {
+                ctx.get_ah().schedule1(ctx, aux_idx, move |auxitem|
+                    mutator.mutate(auxitem)
+                );
+                ctx.get_ah().schedule1(ctx, aux_idx, move |auxitem|
+                    mutator.mutate(auxitem)
+                );
             }
         }
     });
+    */
 
     //println!("Time taken: {:?}", Instant::now() - start_time);
 
@@ -749,7 +800,7 @@ pub fn benchmark_mypool3_aux(bench: &mut Bencher) {
 
     let aux_chunk_size = (aux.len()+pool.thread_count()-1) / pool.thread_count();
     bench.iter(move || {
-        pool.execute_all(&mut data, PtrHolder::new(&mut aux), |datas, ctx|{
+        pool.execute_all(&mut data, PtrHolder::new(&mut aux, pool.thread_count()), |datas, ctx|{
             for (idx,x) in datas.iter_mut().enumerate() {
 
                 let aux_idx = ctx.aux_context.cur_data_offset+idx;
@@ -766,41 +817,46 @@ pub fn benchmark_mypool3_aux(bench: &mut Bencher) {
 }
 
 
-pub struct DoublePtrHolder {
+pub struct DoublePtrHolder<'a> {
     p1: usize,
     p2: usize,
     p1_chunksize: usize,
     p2_chunksize: usize,
+    pd: PhantomData<&'a ()>,
 }
-impl DoublePtrHolder {
-    pub fn new(aux1:&mut Vec<ExampleItem>,aux2:&mut Vec<ExampleItem>) -> DoublePtrHolder {
+impl<'a> DoublePtrHolder<'a> {
+    pub fn new(aux1:&mut Vec<ExampleItem>,aux2:&mut Vec<ExampleItem>) -> DoublePtrHolder<'a> {
         DoublePtrHolder {
             p1: aux1.as_mut_ptr() as usize,
             p2: aux2.as_mut_ptr() as usize,
             p1_chunksize: (aux1.len()+MAX_THREADS-1) / MAX_THREADS,
-            p2_chunksize: (aux2.len()+MAX_THREADS-1) / MAX_THREADS
+            p2_chunksize: (aux2.len()+MAX_THREADS-1) / MAX_THREADS,
+            pd: PhantomData
         }
     }
     fn get1(&mut self, index:usize) -> &mut ExampleItem {
         unsafe {&mut *(self.p1 as *mut ExampleItem).wrapping_add(index)}
     }
-    pub fn schedule1<'a,F:FnOnce(&mut ExampleItem)+Sync+Send+'a>(&self, ctx:&mut AuxScheduler<DoublePtrHolder>, index:usize, f:F )
+    pub fn schedule1<F:FnOnce(&mut ExampleItem)+Sync+Send+'a>(&self, ctx:&mut AuxScheduler<DoublePtrHolder<'a>>, index:usize, f:F )
     {
         ctx.schedule((index as usize/self.p1_chunksize) as u32, move|mut auxitem|{
              f(unsafe{(auxitem).get1(index)})
         })
     }
 }
-impl AuxHolder for DoublePtrHolder {
+impl<'a> AuxHolder for DoublePtrHolder<'a> {
     fn cheap_copy(&self) -> Self {
         DoublePtrHolder {
             p1: self.p1,
             p2: self.p2,
             p1_chunksize: self.p1_chunksize,
             p2_chunksize: self.p2_chunksize,
+            pd:PhantomData
         }
     }
 }
+
+
 #[bench]
 pub fn benchmark_mypool3_double_aux(bench: &mut Bencher) {
     let mut pool = Pool::new();
@@ -813,18 +869,12 @@ pub fn benchmark_mypool3_double_aux(bench: &mut Bencher) {
     let auxref1 = &mut aux1;
     let auxref2 = &mut aux2;
     bench.iter(move || {
-        pool.execute_all(dataref, DoublePtrHolder::new(auxref1,auxref2), |datas, ctx|{
+        pool.execute_all(dataref, DoublePtrHolder::new(auxref1,auxref2), move|datas, ctx|{
             for (idx,x) in datas.iter_mut().enumerate() {
-
                 let aux_idx = ctx.aux_context.cur_data_offset+idx;
                 let temp_ref = &x.data;
-                compile_error!("See if this can be made more safe and ergonomic");
                 {
                     ctx.get_ah().schedule1(ctx, aux_idx, move|data|data.data += *temp_ref);
-/*                    ctx.schedule((aux_idx as usize/aux1_chunk_size) as u32, move|mut auxitem|{
-                        let item = unsafe{(auxitem).get1(aux_idx)};
-                        item.data += *temp_ref as u64;
-                    })*/
                 }
             }
         });
