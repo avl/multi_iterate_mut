@@ -20,6 +20,8 @@ use test::Bencher;
 use arrayvec::ArrayVec;
 #[cfg(test)]
 use std::ops::DerefMut;
+mod ptr_holder_1;
+mod ptr_holder_2;
 
 
 pub const PROB_SIZE: usize = 100000;

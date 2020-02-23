@@ -24,13 +24,15 @@ use std::time::{Instant, Duration};
 
 
 const MAX_THREADS: usize = 8;
-const SUB_BATCH: usize = 64;
+const SUB_BATCH: usize = 1024;
 const MAX_CLOSURE_COUNT: usize = 8*SUB_BATCH * MAX_THREADS;
 
 #[repr(align(64))]
 struct SyncStateInOwnCacheline(AtomicUsize);
 
 use core_affinity::CoreId;
+use crate::ptr_holder_1::{PtrHolder1, Context1};
+use crate::ptr_holder_2::{PtrHolder2, Context2};
 
 
 lazy_static! {
@@ -64,11 +66,11 @@ pub struct AuxScheduler<'a, A> {
 }
 
 impl<'a, AH: AuxHolder> AuxScheduler<'a, AH> {
-    fn schedule<'b, FA: FnOnce(AH) + Send + Sync + 'b>(&'b mut self, channel: u32, f: FA) {
+    pub(crate) fn schedule<'b, FA: FnOnce(AH) + Send + Sync + 'b>(&'b mut self, channel: u32, f: FA) {
         self.aux_context.defer_stores[channel as usize].add(f);
     }
     #[inline(always)]
-    fn get_ah(&self) -> AH {
+    pub(crate) fn get_ah(&self) -> AH {
         unsafe { &*(self.aux_context.ptr_holder as *mut AH) }.cheap_copy()
     }
 }
@@ -235,54 +237,6 @@ pub trait AuxHolder: Send + Sync {
 }
 
 
-mod ptr_holder_1 {
-    use std::marker::PhantomData;
-    use crate::mypool3::{AuxHolder, AuxScheduler};
-
-    struct PtrHolder1<'a, T> {
-        t: usize,
-        //*mut T
-        chunksize: usize,
-        pd: PhantomData<(&'a T)>,
-    }
-    impl<'a, T: Send + Sync> AuxHolder for PtrHolder1<'a, T> {
-        fn cheap_copy(&self) -> Self {
-            PtrHolder1 {
-                t: self.t,
-                chunksize: self.chunksize,
-                pd: PhantomData,
-            }
-        }
-    }
-    impl<'a, T: Send + Sync> PtrHolder1<'a, T> {
-        #[inline]
-        pub fn get0(&self, index: usize) -> &mut T {
-            unsafe { &mut *(self.t as *mut T).wrapping_add(index) }
-        }
-        #[inline]
-        pub fn new(input: &'a mut [T], thread_count: usize) -> PtrHolder1<T> {
-            PtrHolder1 {
-                t: input.as_mut_ptr() as usize,
-                chunksize: (input.len() + thread_count - 1) / thread_count,
-                pd: PhantomData,
-            }
-        }
-        fn schedule0<'b, F: FnOnce(&mut T) + Sync + Send + 'b>(&self, ctx: &'b mut AuxScheduler<PtrHolder1<'a, T>>, index: usize, f: F)
-        {
-            ctx.schedule((index as usize / self.chunksize) as u32, move |mut auxitem| {
-                f(unsafe { (auxitem).get0(index) })
-            })
-        }
-    }
-    pub struct Context<'a, 'b, T> {
-        ptr_holder: &'b mut AuxScheduler<'a, PtrHolder1<'a, T>>
-    }
-    impl<'a, 'b, T: Send + Sync> Context<'a, 'b, T> {
-        pub fn schedule<F: FnOnce(&mut T) + Send + Sync + 'b>(&mut self, index: usize, f: F) {
-            self.ptr_holder.get_ah().schedule0(self.ptr_holder, index, f)
-        }
-    }
-}
 
 
 
@@ -332,7 +286,6 @@ impl Pool {
             avec.push(f);
         }
 
-        //let aux_ptr = aux;
         let aux_ptr_usize = &mut aux as *mut AH as usize;
 
         let mut debug_count = 0usize;
@@ -709,12 +662,26 @@ pub fn check_eq(a: &Vec<u64>, b: &Vec<u64>) {
 
 
 
-pub fn execute_all<'a, T: Send + Sync, A1: Send + Sync, F: for<'b> Fn(usize, &'a mut T, Context<'a, 'b, A1>) + 'a + Send + Sync>(
-    pool: &mut Pool, data: &'a mut Vec<T>, aux0: &'a mut Vec<A1>, f: F) {
+pub fn execute_all<'a, T: Send + Sync, A0: Send + Sync, F: for<'b> Fn(usize, &'a mut T, Context1<'a, 'b, A0>) + 'a + Send + Sync>(
+    pool: &mut Pool, data: &'a mut Vec<T>, aux0: &'a mut Vec<A0>, f: F) {
     pool.execute_all(data, PtrHolder1::new(aux0, pool.thread_count()), move |datas, ctx| {
         let mut idx = ctx.aux_context.cur_data_offset;
         for x in datas.iter_mut() {
-            let mycontext = Context {
+            let mycontext = Context1 {
+                ptr_holder: ctx
+            };
+            f(idx, x, mycontext);
+            idx += 1;
+        }
+    });
+}
+
+pub fn execute_all2<'a, T: Send + Sync, A0: Send + Sync, A1: Send + Sync, F: for<'b> Fn(usize, &'a mut T, Context2<'a, 'b, A0, A1>) + 'a + Send + Sync>(
+    pool: &mut Pool, data: &'a mut Vec<T>, aux0: &'a mut Vec<A0>, aux1: &'a mut Vec<A1>, f: F) {
+    pool.execute_all(data, PtrHolder2::new(aux0, aux1, pool.thread_count()), move |datas, ctx| {
+        let mut idx = ctx.aux_context.cur_data_offset;
+        for x in datas.iter_mut() {
+            let mycontext = Context2 {
                 ptr_holder: ctx
             };
             f(idx, x, mycontext);
@@ -740,58 +707,132 @@ pub fn fuzz_iteration(seed: u32) {
     let aux_chunk_size = (aux_size + pool.thread_count() - 1) / pool.thread_count();
     let auxlen = aux.len();
 
+    //println!("Aux items: {}/{}",aux.len(),aux_size);
+    let aux_ptr = aux.as_ptr() as usize;
+    let aux_ptr2 = aux2.as_ptr() as usize;
+
     execute_all(&mut pool, &mut data, &mut aux, move |idx, x, mut ctx| {
+        *x += 1;
+        if aux_size == 0 {
+            return;
+        }
         let mut rng = rng;
         rng.mix_in(idx as u32);
         let mut mutator = Mutator::new(rng, x, idx as u64);
 
         if let Some(aux_idx) = mutator.aux_item(aux_size) {
-            //println!("For item: {}, mutating item {}",idx,aux_idx);
-            //let mut mut2 = mutator.clone();
-            //mut2.rng.mix_in(42);
             ctx.schedule(aux_idx, move |auxitem| {
-
-                mutator.mutate(auxitem)
-                //println!("under test Assigning 42 to {}",aux_idx);
-                //*auxitem=42;
+                mutator.mutate(auxitem);
             });
-            /*ctx.schedule(aux_idx, move |auxitem| {
-                mut2.mutate(auxitem)
-            });*/
+            ctx.schedule(aux_idx, move |auxitem| {
+                *auxitem = *auxitem ^ 1;
+            })
         }
-
     });
-
-    //println!("Time taken: {:?}", Instant::now() - start_time);
 
     let chunk_size = (data2.len() + MAX_THREADS - 1) / MAX_THREADS;
 
     if chunk_size != 0 {
         let mut idx=0;
-        for datas in data.chunks_mut(chunk_size) {
-            for x in datas.iter_mut() {
 
+        for x in data2.iter_mut() {
+
+            *x += 1;
+            if aux_size != 0 {
                 let mut rng = rng;
                 rng.mix_in(idx as u32);
                 let mut mutator = Mutator::new(rng, x, idx as u64);
                 {
                     if let Some(aux_idx) = mutator.aux_item(aux_size) {
-                        //aux2[aux_idx] = 42;
-                        //println!("Correct Assigning 42 to {}",aux_idx);
-                        //let mut mut2 = mutator.clone();
-                        //mut2.rng.mix_in(42);
-
                         mutator.mutate(&mut aux2[aux_idx]);
-                        //mut2.mutate(&mut aux[aux_idx]);
+                        (aux2[aux_idx]) ^= 1;
                     }
                 }
-                idx+=1;
             }
+            idx+=1;
         }
+
     }
     check_eq(&data, &data2);
     check_eq(&aux, &aux2);
 }
+
+
+pub fn fuzz_iteration2(seed: u32) {
+    let mut pool = Pool::new();
+    let mut rng = XorRng::new(seed);
+    let data_size = gen_size(&mut rng);
+    let aux_size0 = gen_size(&mut rng);
+    let aux_size1 = gen_size(&mut rng);
+
+    let mut data = gen_data(&mut rng, data_size);
+    let mut aux0 = gen_data(&mut rng, aux_size0);
+    let mut aux1 = gen_data(&mut rng, aux_size1);
+
+    let mut datab = data.clone();
+    let mut aux0b = aux0.clone();
+    let mut aux1b = aux1.clone();
+
+
+    execute_all2(&mut pool, &mut data, &mut aux0, &mut aux1, move |idx, x, mut ctx| {
+        let mut rng = rng;
+        rng.mix_in(idx as u32);
+        *x+=1;
+        let mut mutator = Mutator::new(rng, x, idx as u64);
+
+        if aux_size0 == 0 || aux_size1 == 0 {
+            return;
+        }
+        let mut mutator2 = Mutator::new(rng, x, idx as u64);
+
+        if let Some(aux_idx) = mutator.aux_item(aux_size0) {
+            ctx.schedule0(aux_idx, move |auxitem| {
+                mutator.mutate(auxitem);
+            });
+        }
+        if let Some(aux_idx) = mutator2.aux_item(aux_size1) {
+            ctx.schedule1(aux_idx, move |auxitem| {
+                mutator2.mutate(auxitem);
+            });
+        }
+
+
+    });
+
+    let chunk_size = (datab.len() + MAX_THREADS - 1) / MAX_THREADS;
+
+    if chunk_size != 0 {
+        let mut idx=0;
+
+        for x in datab.iter_mut() {
+            *x+=1;
+
+            if aux_size0 != 0 && aux_size1 != 0 {
+
+                let mut rng = rng;
+                rng.mix_in(idx as u32);
+                let mut mutator = Mutator::new(rng, x, idx as u64);
+                let mut mutator2 = Mutator::new(rng, x, idx as u64);
+                {
+                    if let Some(aux_idx) = mutator.aux_item(aux_size0) {
+                        mutator.mutate(&mut aux0b[aux_idx]);
+                    }
+                    if let Some(aux_idx) = mutator2.aux_item(aux_size1) {
+                        mutator2.mutate(&mut aux1b[aux_idx]);
+                    }
+                }
+
+            }
+            idx+=1;
+        }
+
+
+    }
+    check_eq(&data, &datab);
+    check_eq(&aux0, &aux0b);
+    check_eq(&aux1, &aux1b);
+}
+
 
 #[test]
 pub fn mypool3_fuzz0() {
@@ -807,11 +848,30 @@ pub fn mypool3_fuzz1() {
 pub fn mypool3_fuzz2() {
     fuzz_iteration(0);
 }
+#[test]
+pub fn mypool3_fuzz4() {
+    fuzz_iteration(4);
+}
+
+
+#[test]
+pub fn mypool3_fuzz2_0() {
+    fuzz_iteration2(0);
+}
 
 #[test]
 pub fn mypool3_fuzz_many() {
     for x in 0..1000 {
+        println!("Fuzzing {}",x);
         fuzz_iteration(x);
+    }
+}
+
+#[test]
+pub fn mypool3_fuzz_many2() {
+    for x in 0..1000 {
+        println!("Fuzzing2 {}",x);
+        fuzz_iteration2(x);
     }
 }
 
@@ -920,6 +980,42 @@ pub fn benchmark_mypool3_double_aux(bench: &mut Bencher) {
                     ctx.get_ah().schedule1(ctx, aux_idx, move |data| data.data += 1);
                 }
             }
+        });
+    });
+}
+
+
+#[bench]
+pub fn benchmark_mypool3_double_aux_new(bench: &mut Bencher) {
+    let mut pool = Pool::new();
+    let mut data = make_example_data();
+    let mut aux1 = make_example_data();
+    let mut aux2 = make_example_data();
+
+    let aux1_chunk_size = (aux1.len() + pool.thread_count() - 1) / pool.thread_count();
+    let dataref = &mut data;
+    let auxref1 = &mut aux1;
+    let auxref2 = &mut aux2;
+    bench.iter(move || {
+        execute_all2(&mut pool, dataref, &mut aux1, &mut aux2,|idx,data,mut context|{
+            let aux_idx = idx;
+            context.schedule0(aux_idx,|data|data.data+=1);
+        });
+    });
+}
+
+#[bench]
+pub fn benchmark_mypool3_simple_new(bench: &mut Bencher) {
+    let mut pool = Pool::new();
+    let mut data = make_example_data();
+    let mut aux1 = make_example_data();
+
+    let aux1_chunk_size = (aux1.len() + pool.thread_count() - 1) / pool.thread_count();
+    let dataref = &mut data;
+    let auxref1 = &mut aux1;
+    bench.iter(move || {
+        execute_all(&mut pool, dataref, &mut aux1, |idx,data,mut context|{
+            data.data += 1;
         });
     });
 }
