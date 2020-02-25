@@ -6,9 +6,7 @@
 
 # Part 2, Allowing Side Effects
 
-This is a continuation of the series started at [Part 1](https://github.com/avl/multi_iterate_mut/blob/master/Part1.md).
-
-In part 1 we looked at quickly doing operations on all items in a vector, using many CPU cores.
+In [Part 1](https://github.com/avl/multi_iterate_mut/blob/master/Part1.md) we looked at quickly doing operations on all items in a vector, using many CPU cores.
 
 In this part we're looking at making it possible to update data in some other vector while
 traversing the first vector.
