@@ -1,7 +1,12 @@
+[Back to main](https://github.com/avl/multi_iterate_mut/blob/master/README.md)
+
+<sub>Author: Anders Musikka</sub>
+
+<sub>Date: 2020-02-16</sub>
 
 # Part 2, Allowing Side Effects
 
-This is a continuation of the series start at https://github.com/avl/multi_iterate_mut/blob/master/Part1.md .
+This is a continuation of the series started at [Part 1](https://github.com/avl/multi_iterate_mut/blob/master/Part1.md).
 
 In part 1 we looked at quickly doing operations on all items in a vector, using many CPU cores.
 
