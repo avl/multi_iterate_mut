@@ -8,7 +8,7 @@ pub(crate) struct PtrHolder1<'a, T> {
     pd: PhantomData<&'a T>,
 }
 impl<'a, T: Send + Sync> AuxHolder for PtrHolder1<'a, T> {
-    fn cheap_copy(&self) -> Self {
+    unsafe fn cheap_copy(&self) -> Self {
         PtrHolder1 {
             t: self.t,
             chunksize: self.chunksize,

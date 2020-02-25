@@ -177,7 +177,9 @@ foreach f in scheduleinfo[N]
 
 ````
 
-Implementing this, and running it on the same problem we ran the locking implementation on, we get:
+I've made an implementation of this, in a module with the boring name "mypool3". 
+
+Running it on the same problem we ran the locking implementation on, we get:
 
 ````
 test mypool3::benchmark_mypool3_aux_new(modified)        ... bench:     140,464 ns/iter (+/- 4,018)

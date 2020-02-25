@@ -9,7 +9,7 @@ pub(crate) struct PtrHolder2<'a, T0, T1> {
     pd: PhantomData<&'a (T0,T1)>,
 }
 impl<'a, T0: Send + Sync,T1:Send+Sync> AuxHolder for PtrHolder2<'a, T0, T1> {
-    fn cheap_copy(&self) -> Self {
+    unsafe fn cheap_copy(&self) -> Self {
         PtrHolder2 {
             t0: self.t0,
             t1: self.t1,
