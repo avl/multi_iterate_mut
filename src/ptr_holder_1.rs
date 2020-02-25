@@ -39,11 +39,11 @@ impl<'a, T: Send + Sync> PtrHolder1<'a, T> {
         })
     }
 }
-pub struct Context1<'a, 'b, T> {
-    pub(crate) ptr_holder: &'b mut AuxScheduler<'a, PtrHolder1<'a, T>>
+pub struct Context1<'a, 'b, A0> {
+    pub(crate) ptr_holder: &'b mut AuxScheduler<'a, PtrHolder1<'a, A0>>
 }
-impl<'a, 'b, T: Send + Sync> Context1<'a, 'b, T> {
-    pub fn schedule<F: FnOnce(&mut T) + Send + Sync + 'b>(&mut self, index: usize, f: F) {
+impl<'a, 'b, A0: Send + Sync> Context1<'a, 'b, A0> {
+    pub fn schedule<F: FnOnce(&mut A0) + Send + Sync + 'b>(&mut self, index: usize, f: F) {
         self.ptr_holder.get_ah().schedule0(self.ptr_holder, index, f)
     }
 }

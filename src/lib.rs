@@ -20,6 +20,9 @@ use test::Bencher;
 use arrayvec::ArrayVec;
 #[cfg(test)]
 use std::ops::DerefMut;
+#[cfg(test)]
+use std::cell::UnsafeCell;
+
 mod ptr_holder_1;
 mod ptr_holder_2;
 
@@ -74,7 +77,7 @@ pub fn run_mypool<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data:&mut
 }
 
 
-pub fn run_mypool2<T: Send+Sync, F: Fn(&mut T) + Send + Sync + 'static>(data: &mut [T], pool: &mut mypool2::Pool, f: F) {
+pub fn run_mypool2<T: Send+Sync, F: Fn(&mut T) + Send + Sync>(data: &mut [T], pool: &mut mypool2::Pool, f: F) {
     let thread_count = pool.thread_count() as usize;
     let chunk_size = (data.len() + thread_count-1) / thread_count;
     let fref = &f;
@@ -165,31 +168,55 @@ fn benchmark_mypool2(bench: &mut Bencher) {
 
 
 #[bench]
+fn benchmark_mypool_aux_reference(bench: &mut Bencher) {
+    let mut pool = mypool2::Pool::new(THREADS);
+    let mut data = make_data();
+    let mut aux = data.clone();
+    bench.iter(move || {
+        run_mypool2(&mut data, &mut pool, |item| {
+            *item += 1;
+        });
+        run_mypool2(&mut aux, &mut pool, |item| {
+            *item += 1;
+        });
+    });
+}
+
+
+#[bench]
 pub fn benchmark_aux_locking(bench: &mut Bencher) {
     let mut pool = mypool2::Pool::new(THREADS);
     let mut data = make_data();
     use parking_lot::Mutex;
-    let thread_count = pool.thread_count();
-    let chunk_size = (data.len() + thread_count-1) / thread_count;
 
     let aux:Vec<Mutex<u64>> = make_data().drain(..).map(|x|Mutex::new(x)).collect();
-
 
     let auxref = &aux;
     bench.iter(move || {
 
-        let args: ArrayVec<[_; THREADS]> = data.chunks_mut(chunk_size).map(|datachunk_items| {
-            let f = move|| {
-                for item in datachunk_items.iter_mut() {
-                    let mut guard = auxref[*item as usize].lock();
-                    *guard.deref_mut() += 1;
-                }
-            };
-            f
-        }).collect();
-        pool.execute_all(args);
-
+        run_mypool2(&mut data, &mut pool, |item| {
+            let mut guard = auxref[*item as usize].lock();
+            *guard.deref_mut() += 1;
+        });
     });
+}
+
+#[bench]
+pub fn benchmark_aux_unsafecell_nolocking(bench: &mut Bencher) {
+    let mut pool = mypool2::Pool::new(THREADS);
+    let mut data = make_data();
+
+    let aux:Vec<UnsafeCell<u64>> = make_data().iter().map(|x|UnsafeCell::new(*x)).collect();
+
+    let auxref = aux.as_ptr() as usize;
+    bench.iter(move || {
+
+        run_mypool2(&mut data, &mut pool, |item| {
+            let auxptr = unsafe{(*{auxref as *const UnsafeCell<u64>}.add(*item as usize)).get()};
+            unsafe{auxptr.write(auxptr.read()+1)};
+        });
+    });
+
 }
 
 #[bench]
@@ -197,7 +224,6 @@ pub fn benchmark_aux_singlethreaded(bench: &mut Bencher) {
     let mut data = make_data();
 
     let mut aux:Vec<u64> = make_data();
-
 
     bench.iter(move || {
 

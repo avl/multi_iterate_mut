@@ -24,7 +24,7 @@ use std::time::{Instant, Duration};
 
 
 const MAX_THREADS: usize = 8;
-const SUB_BATCH: usize = 1024;
+const SUB_BATCH: usize = 256;
 const MAX_CLOSURE_COUNT: usize = 8*SUB_BATCH * MAX_THREADS;
 
 #[repr(align(64))]
@@ -167,13 +167,9 @@ impl DeferStore {
 
         unsafe {
             write_pointer.write(f_ptr_data.1);
-            /*copy_nonoverlapping(&f_ptr_data.1 as *const usize as *const u8,
-                                write_pointer, 8)*/
         };
 
-        //write_pointer= write_pointer.wrapping_add(16);
         unsafe { self.magic.set_len(self.magic.len() + tot_size) };
-        //println!("Scheduled. Write pointer is now {:?}",write_pointer);
         std::mem::forget(f);
     }
     pub fn process<AH: AuxHolder>(&mut self, aux: AH) {
