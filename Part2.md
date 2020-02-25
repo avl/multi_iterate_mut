@@ -2,7 +2,7 @@
 
 <sub>Author: Anders Musikka</sub>
 
-<sub>Date: 2020-02-16</sub>
+<sub>Date: 2020-02-25</sub>
 
 # Part 2, Allowing Side Effects
 
