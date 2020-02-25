@@ -80,6 +80,8 @@ One way to provide access to each auxiliary item is to have a Mutex for each ite
 The benchmark 'benchmark_aux_locking' in the code implements this. Running this benchmark
 with 100000 items on 8 threads gives:
 
+#### Benchmark
+
 ```` 
 test benchmark_aux_locking                     ... bench:     109,450 ns/iter (+/- 1,449)
 ````
@@ -93,6 +95,8 @@ test benchmark_mypool_aux_reference            ... bench:       7,722 ns/iter (+
 
 This is more than 10 times faster! But, since it doesn't solve our problem it doesn't help us.
 
+#### Problems with locks
+
 Back to the locking implementation. 
 There are several problems with using locks. The biggest problem is that such a solution
 will never be deterministic. The whole point of locks is to serialize parallel operations which
@@ -104,6 +108,8 @@ Also, performance isn't great. It is more than a factor 10 slower than doing the
 
 One reason for the slowdown is that locking is actually rather expensive, even in the uncontended
 case.
+
+#### Overhead of locks
 
 If we just remove the locking, but just do totally unsafe racy raw pointer writes, we get 
 something like:
@@ -125,6 +131,8 @@ barely above 100000 ns. So with 8 threads, this means the cost of acquiring a lo
 mathematically be below about 8 nanoseconds. So, slow compared to integer arithmetic but fast compared
 to something like network access.
 
+#### Vectorisation
+
 One other reason there is overhead compared to the benchmark_mypool_aux_reference benchmark is
 the missed vectorisation. No vectorisation will be possible for the writes to the auxiliary vector, 
 since the optimizer has no way to know that subsequent accesses to this vector will be sequential 
@@ -144,6 +152,8 @@ Ok, full disclosure: The API proposed in a previous chapter is made with this im
 
 For each item in the input data Vec, a closure is called and allowed to schedule a second closure
 which knows how to update an auxiliary element.
+
+#### Algorithm
 
 One way to implement this is to have a per-thread Vec\<"Closure"\> and accumulate all scheduled mutating actions. 
 After processing the main input, the accumulated closures
@@ -182,6 +192,7 @@ foreach f in scheduleinfo[N]
 
 ````
 
+#### Benchmark
 I've made an implementation of this, in a module with the boring name "mypool3". 
 
 Running it on the same problem we ran the locking implementation on, we get:
@@ -192,6 +203,8 @@ test mypool3::benchmark_mypool3_aux_new(modified)        ... bench:     140,464 
 
 This is not totally bad. The locking implementation is faster, but this implementation has
 deterministic behaviour. But can we do better?
+
+#### Cache effects
 
 One thing we may note is that this algorithm is a bit wasteful with cache. It will pollute
 the cache with the closures stored in the 'scheduleinfo' vectors.
