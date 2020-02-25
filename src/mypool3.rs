@@ -665,6 +665,8 @@ pub fn execute_all2<'a, T: Send + Sync, A0: Send + Sync, A1: Send + Sync, F: for
         }
     });
 }
+
+
 #[cfg(test)]
 pub fn fuzz_iteration(seed: u32) {
     let mut pool = Pool::new();
@@ -815,12 +817,12 @@ pub fn mypool3_fuzz0() {
 
 #[test]
 pub fn mypool3_fuzz1() {
-    fuzz_iteration(0);
+    fuzz_iteration(1);
 }
 
 #[test]
 pub fn mypool3_fuzz2() {
-    fuzz_iteration(0);
+    fuzz_iteration(2);
 }
 #[test]
 pub fn mypool3_fuzz4() {
@@ -892,6 +894,8 @@ pub fn benchmark_mypool3_aux_new(bench: &mut Bencher) {
 }
 
 
+
+
 pub struct DoublePtrHolder<'a> {
     p1: usize,
     p2: usize,
@@ -955,6 +959,37 @@ pub fn benchmark_mypool3_double_aux(bench: &mut Bencher) {
             }
         });
     });
+}
+
+#[test]
+pub fn mypool3_try_test_determinism() {
+    let mut pool = Pool::new();
+
+    for i in 0..1000 {
+
+        let mut rng = XorRng::new(i);
+        let mut data_a = gen_data(&mut rng, PROB_SIZE);
+        let mut aux_a = gen_data(&mut rng, PROB_SIZE);
+
+        let mut data_b = data_a.clone();
+        let mut aux_b = aux_a.clone();
+
+        execute_all(&mut pool, &mut data_a, &mut aux_a,|idx,data,mut context|{
+            let aux_idx = (*data as usize)%PROB_SIZE;
+            context.schedule(aux_idx,move|data|*data=idx as u64);
+        });
+
+        execute_all(&mut pool, &mut data_b, &mut aux_b,|idx,data,mut context|{
+            let aux_idx = (*data as usize)%PROB_SIZE;
+            context.schedule(aux_idx,move|data|*data=idx as u64);
+        });
+
+        assert_eq!(aux_a,aux_b);
+        assert_eq!(data_a,data_b);
+    }
+
+
+
 }
 
 
