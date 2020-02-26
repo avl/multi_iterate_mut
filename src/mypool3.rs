@@ -24,7 +24,7 @@ use std::time::{Instant, Duration};
 
 
 const MAX_THREADS: usize = 8;
-const SUB_BATCH: usize = 256;
+const SUB_BATCH: usize = 2048;
 const MAX_CLOSURE_COUNT: usize = 8*SUB_BATCH * MAX_THREADS;
 
 #[repr(align(64))]
@@ -34,7 +34,6 @@ use core_affinity::CoreId;
 use crate::ptr_holder_1::{PtrHolder1, Context1};
 use crate::ptr_holder_2::{PtrHolder2, Context2};
 use std::ops::{DerefMut, Deref};
-use std::f32::MAX_10_EXP;
 
 
 lazy_static! { // Make sure the cores are enumerated once, at startup, since the num_cpus crate used by core_affinity crate actually only returns cores for which the current thread has affinity. So after we've started running and assigning affinity, we may get a different (wrong) number of cores.
@@ -363,21 +362,32 @@ impl Pool {
                         let curval = friend.load(Ordering::SeqCst);
                         if curval >= our_sync_counter {
                             //println!("Thread {} decided iteration {} was done (curval: {}) and is now processing",aux_context.thread_number,iteration,curval);
-                            {
-
-                                let all_stores = unsafe{&*aux_context.other_stores};
-                                for i in 0..MAX_THREADS {
-                                    let store = unsafe{&mut *all_stores.all_stores[i].thread_stores[aux_context.thread_number].get()};
-                                    store.process(unsafe{auxcopy.cheap_copy()});
-                                }
-
-                            }
                             //println!("Thread {} iteration {} processing done",aux_context.thread_number,iteration);
-                            iteration += 1;
                             break;
                         }
                     }
+                    {
+                        iteration += 1;
+                        let all_stores = unsafe{&*aux_context.other_stores};
+                        for i in 0..MAX_THREADS {
+                            let store = unsafe{&mut *all_stores.all_stores[i].thread_stores[aux_context.thread_number].get()};
+                            store.process(unsafe{auxcopy.cheap_copy()});
+                        }
 
+                    }
+
+                    our_sync_counter += MAX_THREADS;
+                    //println!("Thread: {}, done with {}, stepping counter: {}",aux_context.thread_number,iteration,friend.load(Ordering::SeqCst));
+                    friend.fetch_add(1, Ordering::SeqCst);
+
+                    loop {
+                        let curval = friend.load(Ordering::SeqCst);
+                        if curval >= our_sync_counter {
+                            //println!("Thread {} decided iteration {} was done (curval: {}) and is now processing",aux_context.thread_number,iteration,curval);
+                            //println!("Thread {} iteration {} processing done",aux_context.thread_number,iteration);
+                            break;
+                        }
+                    }
 
                 }
             });
