@@ -24,7 +24,7 @@ use std::time::{Instant, Duration};
 
 
 const MAX_THREADS: usize = 8;
-const SUB_BATCH: usize = 2048;
+const SUB_BATCH: usize = 512;
 const MAX_CLOSURE_COUNT: usize = 8*SUB_BATCH * MAX_THREADS;
 
 #[repr(align(64))]
@@ -153,6 +153,7 @@ pub struct Pool {
 }
 
 #[derive(Clone, Debug)]
+#[repr(align(64))]
 struct DeferStore {
     magic: Vec<usize>,
 }
@@ -326,7 +327,7 @@ impl Pool {
 
         let aux_ptr_usize = &mut aux as *mut AH as usize;
 
-        let mut debug_count = 0usize;
+        //let mut debug_count = 0usize;
         for data_chunk in data_chunks_iterator {
             let fref = &f;
             let auxcopy = unsafe{aux.cheap_copy()};
@@ -343,6 +344,7 @@ impl Pool {
                 let friend:&AtomicUsize = unsafe { &*aux_context.friend_sync_state };
 
                 //println!("Chunk start {}",aux_context.thread_number);
+                let all_stores = unsafe{&*aux_context.other_stores};
                 while iteration < iterations {
                     let cur_len = len_remaining.min(SUB_BATCH);
                     //println!("Thread: {}, Iteration: {}",aux_context.thread_number,iteration);
@@ -356,19 +358,19 @@ impl Pool {
 
                     our_sync_counter += MAX_THREADS;
                     //println!("Thread: {}, done with {}, stepping counter: {}",aux_context.thread_number,iteration,friend.load(Ordering::SeqCst));
-                    friend.fetch_add(1, Ordering::SeqCst);
+                    friend.fetch_add(1, Ordering::Release);
 
                     loop {
-                        let curval = friend.load(Ordering::SeqCst);
+                        let curval = friend.load(Ordering::Acquire);
                         if curval >= our_sync_counter {
                             //println!("Thread {} decided iteration {} was done (curval: {}) and is now processing",aux_context.thread_number,iteration,curval);
                             //println!("Thread {} iteration {} processing done",aux_context.thread_number,iteration);
                             break;
                         }
+                        std::sync::atomic::spin_loop_hint();
                     }
                     {
                         iteration += 1;
-                        let all_stores = unsafe{&*aux_context.other_stores};
                         for i in 0..MAX_THREADS {
                             let store = unsafe{&mut *all_stores.all_stores[i].thread_stores[aux_context.thread_number].get()};
                             store.process(unsafe{auxcopy.cheap_copy()});
@@ -378,20 +380,21 @@ impl Pool {
 
                     our_sync_counter += MAX_THREADS;
                     //println!("Thread: {}, done with {}, stepping counter: {}",aux_context.thread_number,iteration,friend.load(Ordering::SeqCst));
-                    friend.fetch_add(1, Ordering::SeqCst);
+                    friend.fetch_add(1, Ordering::Release);
 
                     loop {
-                        let curval = friend.load(Ordering::SeqCst);
+                        let curval = friend.load(Ordering::Acquire);
                         if curval >= our_sync_counter {
                             //println!("Thread {} decided iteration {} was done (curval: {}) and is now processing",aux_context.thread_number,iteration,curval);
                             //println!("Thread {} iteration {} processing done",aux_context.thread_number,iteration);
                             break;
                         }
+                        std::sync::atomic::spin_loop_hint();
                     }
 
                 }
             });
-            debug_count+=1;
+            //debug_count+=1;
         }
 
         let mut cur_thread_num = 1;
