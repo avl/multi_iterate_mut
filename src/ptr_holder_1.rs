@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use crate::mypool3::{AuxHolder, AuxScheduler};
 
+#[repr(align(64))]
 pub(crate) struct PtrHolder1<'a, T> {
     t: usize,
     //*mut T
@@ -19,10 +20,8 @@ impl<'a, T: Send + Sync> AuxHolder for PtrHolder1<'a, T> {
 impl<'a, T: Send + Sync> PtrHolder1<'a, T> {
     #[inline]
     pub fn get0(&self, index: usize) -> &mut T {
-        let retp = unsafe { &mut *(self.t as *mut T).wrapping_add(index) };
+        unsafe { &mut *(self.t as *mut T).wrapping_add(index) }
         //println!("Get item {} returns {:?} from ptr {:?}",index, retp as *const T,self.t as *mut T);
-
-        retp
     }
     #[inline]
     pub fn new(input: &'a mut [T], thread_count: usize) -> PtrHolder1<T> {
@@ -32,6 +31,7 @@ impl<'a, T: Send + Sync> PtrHolder1<'a, T> {
             pd: PhantomData,
         }
     }
+    #[inline]
     fn schedule0<'b, F: FnOnce(&mut T) + Sync + Send + 'b>(&self, ctx: &'b mut AuxScheduler<PtrHolder1<'a, T>>, index: usize, f: F)
     {
         ctx.schedule((index as usize / self.chunksize) as u32, move |auxitem| {

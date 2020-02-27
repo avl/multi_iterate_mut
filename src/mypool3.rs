@@ -24,7 +24,7 @@ use std::time::{Instant, Duration};
 
 
 const MAX_THREADS: usize = 8;
-const SUB_BATCH: usize = 4096;
+const SUB_BATCH: usize = 8192;
 const MAX_CLOSURE_COUNT: usize = 8*SUB_BATCH * MAX_THREADS;
 
 #[repr(align(64))]
@@ -106,6 +106,8 @@ pub struct AuxScheduler<'a, A> {
 }
 
 impl<'a, AH: AuxHolder> AuxScheduler<'a, AH> {
+
+    #[inline(always)]
     pub(crate) fn schedule<'b, FA: FnOnce(AH) + Send + Sync + 'b>(&'b mut self, channel: u32, f: FA) {
         let defer_store = unsafe{(&mut *self.aux_context.defer_stores)};
         unsafe { (&mut *defer_store[channel as usize].get()).add(f,self.aux_context.iteration) };
@@ -172,6 +174,7 @@ impl DeferStore {
             pusher_owns: false
         }
     }
+    #[inline(always)]
     fn add<AH: AuxHolder + Send + Sync, FA: FnOnce(AH)>(&mut self, f: FA, iteration:usize) {
 
         if std::mem::align_of::<FA>() > 8 {
@@ -235,6 +238,7 @@ impl DeferStore {
         unsafe { self.magic.set_len(self.magic.len() + tot_size) };
         std::mem::forget(f);
     }
+    #[inline(always)]
     fn process<AH: AuxHolder>(&mut self, aux: AH) {
         let mut read_ptr = self.magic.as_ptr() as *const u8;
         loop {
@@ -312,11 +316,12 @@ impl Pool {
             return;
         }
 
+        //println!("Starting new execute_all");
         let thread_count = MAX_THREADS;
         let chunk_size = (data.len() + thread_count - 1) / thread_count;
-        self.sync_state.store(0,Ordering::SeqCst);
+        self.sync_state.store(0, Ordering::SeqCst);
 
-        if /*data.len() < 256 || */chunk_size * (MAX_THREADS - 1) >= data.len() {
+        if data.len() < 256 || chunk_size * (MAX_THREADS - 1) >= data.len() {
             //The ammount of work compared to the threads is such that if work is evenly divided,
             //we'll not actually use all threads.
             //Example: 8 threads, 9 pieces of work. 1 piece per thread => not enough. Two per threads => 16 units of work => only 5 threads actually have work.
@@ -356,7 +361,7 @@ impl Pool {
         for data_chunk in data_chunks_iterator {
             let fref = &f;
             let auxcopy = unsafe{aux.cheap_copy()};
-            add_chunk_processor(&mut chunk_processors, move |aux_context| {
+            add_chunk_processor(&mut chunk_processors, #[inline(always)] move |aux_context| {
                 aux_context.cur_data_offset = ((data_chunk.as_ptr() as usize) - data_ptr) / std::mem::size_of::<T>();
                 let mut our_sync_counter = 0;
                 aux_context.ptr_holder = aux_ptr_usize;
@@ -400,10 +405,10 @@ impl Pool {
                     */
                     if len_remaining != 0 {
                         let aux_cont = unsafe { std::mem::transmute(&mut *aux_context) };
-//                        println!("Thread #{} starting main iteration {}", aux_context.thread_number, aux_context.iteration);
+                        //println!("Thread #{} starting main iteration {}", aux_context.thread_number, aux_context.iteration);
 
                         fref(unsafe { std::slice::from_raw_parts_mut(sub, cur_len) }, aux_cont);
- //                       println!("Thread #{} finished main iteration {}", aux_context.thread_number, aux_context.iteration);
+                        //println!("Thread #{} finished main iteration {}", aux_context.thread_number, aux_context.iteration);
 
                         sub = sub.wrapping_add(cur_len);
                         len_remaining -= cur_len;
@@ -417,9 +422,9 @@ impl Pool {
                         let stores = unsafe{&mut *aux_context.defer_stores};
                         for store in stores {
                             let store = unsafe{&mut *store.get()};
-                            if store.pusher_owns {
+                            /*if store.pusher_owns {
                                 continue;
-                            }
+                            }*/
                             loop {
                                 let cit = store.atomic_sync.load(Ordering::SeqCst);
                                 if cit > aux_context.iteration {
@@ -483,7 +488,7 @@ impl Pool {
                             loop {
                                 let cit = store.atomic_sync.load(Ordering::SeqCst);
                                 if cit > aux_context.iteration {
-                                    panic!("Unexpected runahead");
+                                    panic!("#{} when processing {}: Unexpected runahead. Run is {}, expected {}", aux_context.thread_number, i, cit, aux_context.iteration);
                                 }
                                 if cit == aux_context.iteration {
                                     break;
@@ -505,7 +510,6 @@ impl Pool {
                         }
                         */
                         aux_context.iteration = next_iteration;
-
                     }
 
                     /*
@@ -542,20 +546,13 @@ impl Pool {
             let mut aux_context = unsafe { &mut *thread.aux_context.get() };
             aux_context.cur_nominal_chunk_size = chunk_size;
             aux_context.iteration=0;
+            aux_context.friend_sync_state
             for store in unsafe{(&mut *aux_context.defer_stores).iter_mut()} {
                 let store = unsafe{&mut *store.get()};
                 store.atomic_sync=AtomicUsize::new(0);
                 store.pusher_owns=true;
                 store.magic.clear();
             }
-        }
-        for (thread, arg) in self.threads.iter_mut().zip(chunk_processors.iter_mut().skip(1)) {
-            let mut aux_context = unsafe { &mut *thread.aux_context.get() };
-            let temp_f: &mut dyn FnOnce(&mut AuxContext) = arg;
-            let runner_ref: (usize, usize) = unsafe { transmute(temp_f as *mut dyn FnOnce(&mut AuxContext)) };
-            aux_context.cur_job1.store(runner_ref.0, Ordering::SeqCst);
-            aux_context.cur_job2.store(runner_ref.1, Ordering::SeqCst);
-            cur_thread_num += 1;
         }
 
         {
@@ -570,17 +567,31 @@ impl Pool {
                 store.magic.clear();
             }
 
-            let first_f = &mut chunk_processors[0];
-            (first_f)(&mut self.first_aux_context);
         }
+
+        for (thread, arg) in self.threads.iter_mut().zip(chunk_processors.iter_mut().skip(1)) {
+            let mut aux_context = unsafe { &mut *thread.aux_context.get() };
+            let temp_f: &mut dyn FnOnce(&mut AuxContext) = arg;
+            let runner_ref: (usize, usize) = unsafe { transmute(temp_f as *mut dyn FnOnce(&mut AuxContext)) };
+            assert!(runner_ref.1!=0);
+            aux_context.cur_job1.store(runner_ref.0, Ordering::SeqCst);
+            aux_context.cur_job2.store(runner_ref.1, Ordering::SeqCst);
+            cur_thread_num += 1;
+        }
+
+        let first_f = &mut chunk_processors[0];
+        (first_f)(&mut self.first_aux_context);
 
         for thread in &mut self.threads.iter_mut() {
             loop {
                 if unsafe { &*thread.aux_context.get() }.cur_job2.load(Ordering::SeqCst) == 0 {
+                    //println!("Thread {} done",unsafe{&*thread.aux_context.get()}.thread_number);
                     break;
                 }
+                std::sync::atomic::spin_loop_hint();
             }
         }
+        //println!("Iteration COMPLETELY DONE");
     }
 
     pub fn new() -> Pool {
@@ -739,8 +750,8 @@ pub fn benchmark_mypool3_singular(bench: &mut Bencher) {
 #[derive(Default)]
 pub struct ExampleItem {
     data: u64,
-    //big1: [u64; 32],
-    //big2: [u64; 32],
+    big1: [u64; 32],
+    big2: [u64; 32],
 }
 
 #[cfg(test)]
@@ -857,7 +868,7 @@ pub fn check_eq(a: &Vec<u64>, b: &Vec<u64>) {
 
 pub fn execute_all<'a, T: Send + Sync, A0: Send + Sync, F: for<'b> Fn(usize, &'a mut T, Context1<'a, 'b, A0>) + 'a + Send + Sync>(
     pool: &mut Pool, data: &'a mut Vec<T>, aux0: &'a mut Vec<A0>, f: F) {
-    pool.execute_all(data, PtrHolder1::new(aux0, pool.thread_count()), move |datas, ctx| {
+    pool.execute_all(data, PtrHolder1::new(aux0, pool.thread_count()), #[inline(always)] move |datas, ctx| {
         let mut idx = ctx.aux_context.cur_data_offset;
         for x in datas.iter_mut() {
             let mycontext = Context1 {
@@ -1093,17 +1104,42 @@ pub fn benchmark_mypool3_aux(bench: &mut Bencher) {
 
 
 #[bench]
+pub fn benchmark_mypool3_double_aux_new(bench: &mut Bencher) {
+    let mut pool = Pool::new();
+    let mut data = make_example_data();
+    let mut aux1 = make_example_data();
+    let mut aux2 = make_example_data();
+
+    let aux1_chunk_size = (aux1.len() + pool.thread_count() - 1) / pool.thread_count();
+    let dataref = &mut data;
+    let auxref1 = &mut aux1;
+    let auxref2 = &mut aux2;
+    bench.iter(move || {
+        execute_all2(&mut pool, dataref, auxref1, auxref2,
+                     #[inline(always)]
+                         |idx,data,mut context|{
+
+                         context.schedule0(idx,#[inline(always)]|auxitem|auxitem.data+=1);
+                     });
+    });
+}
+
+#[bench]
 pub fn benchmark_mypool3_aux_new(bench: &mut Bencher) {
     let mut pool = Pool::new();
     let mut data = make_example_data();
     let mut aux = make_example_data();
 
     let aux_chunk_size = (aux.len() + pool.thread_count() - 1) / pool.thread_count();
+    let auxref = &mut aux;
+    let dataref = &mut data;
+    let poolref = &mut pool;
     bench.iter(move || {
-        execute_all(&mut pool, &mut data, &mut aux,
-            move |idx, x, mut ctx| {
+        execute_all(poolref, dataref, auxref,
+            #[inline(always)]
+            |idx, x, mut ctx| {
                 ctx.schedule(idx,
-                             move |auxitem| {
+                             #[inline(always)] |auxitem| {
                                  auxitem.data += 1;
                              });
             });
@@ -1222,24 +1258,6 @@ pub fn mypool3_try_test_determinism() {
 }
 
 
-#[bench]
-pub fn benchmark_mypool3_double_aux_new(bench: &mut Bencher) {
-    let mut pool = Pool::new();
-    let mut data = make_example_data();
-    let mut aux1 = make_example_data();
-    let mut aux2 = make_example_data();
-
-    let aux1_chunk_size = (aux1.len() + pool.thread_count() - 1) / pool.thread_count();
-    let dataref = &mut data;
-    let auxref1 = &mut aux1;
-    let auxref2 = &mut aux2;
-    bench.iter(move || {
-        execute_all2(&mut pool, dataref, &mut aux1, &mut aux2,|idx,data,mut context|{
-            let aux_idx = idx;
-            context.schedule0(aux_idx,|data|data.data+=1);
-        });
-    });
-}
 
 #[bench]
 pub fn benchmark_mypool3_simple_new(bench: &mut Bencher) {
