@@ -1183,7 +1183,7 @@ fn test_determinism_iteration(pool: &mut Pool, i:u32) {
     const LOCAL_PROB_SIZE: usize = PROB_SIZE;
     let mut rng = XorRng::new(i);
     let mut data_a = gen_data(&mut rng, LOCAL_PROB_SIZE);
-    let mut aux_a:Vec<u64> = gen_data(&mut rng, LOCAL_PROB_SIZE).drain(..).map(|x|1024u64).collect();
+    let mut aux_a:Vec<u64> = gen_data(&mut rng, LOCAL_PROB_SIZE).drain(..).map(|x|0).collect();
 
     let mut data_b = data_a.clone();
     let mut aux_b = aux_a.clone();
