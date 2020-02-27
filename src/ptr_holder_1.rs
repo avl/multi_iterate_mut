@@ -34,7 +34,7 @@ impl<'a, T: Send + Sync> PtrHolder1<'a, T> {
     #[inline]
     fn schedule0<'b, F: FnOnce(&mut T) + Sync + Send + 'b>(&self, ctx: &'b mut AuxScheduler<PtrHolder1<'a, T>>, index: usize, f: F)
     {
-        ctx.schedule((index as usize / self.chunksize) as u32, move |auxitem| {
+        ctx.schedule((index as usize / self.chunksize) as u32, #[inline(always)] move |auxitem| {
             f((auxitem).get0(index))
         })
     }
