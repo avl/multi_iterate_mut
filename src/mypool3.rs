@@ -380,6 +380,7 @@ impl Pool {
                 if unsafe { &*thread.aux_context.get() }.cur_job2.load(Ordering::SeqCst) == 0 {
                     break;
                 }
+                spin_loop_hint();
             }
         }
     }
@@ -434,6 +435,7 @@ impl Pool {
                         let cur_job2 = unsafe { &((*aux_context).cur_job2) };
                         cur_job2.store(0, Ordering::SeqCst);
                     }
+                    spin_loop_hint()
                 }
             });
             item.thread_id = Some(thread);
