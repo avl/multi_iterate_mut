@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 use std::{thread, ptr};
 
 use std::mem::transmute;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 
 
 use arrayvec::ArrayVec;
@@ -22,7 +22,7 @@ use crate::make_data;
 use crate::PROB_SIZE;
 
 
-const MAX_THREADS: usize = 16;
+const MAX_THREADS: usize = 8;
 const SUB_BATCH: usize = 256;
 const MAX_CLOSURE_COUNT: usize = 64*SUB_BATCH;
 
@@ -336,6 +336,7 @@ impl Pool {
                             iteration += 1;
                             break;
                         }
+                        spin_loop_hint();
                         {
                             //debug_wait_cycles+=1;
                         }
@@ -401,15 +402,15 @@ impl Pool {
             });
         }
 
-        //core_affinity::set_for_current(core_ids[0]);
+        core_affinity::set_for_current(core_ids[0]);
 
         for (i, (item, completion_sender)) in v.iter_mut().zip(completion_senders.into_iter()).enumerate() {
             let aux_context = item.aux_context.get() as usize;
 
-            let _core_id = core_ids[(i + 1) % core_ids.len()];
+            let core_id = core_ids[(i+1) % core_ids.len()];
 
             let thread = thread::spawn(move || {
-                //core_affinity::set_for_current(core_id);
+                core_affinity::set_for_current(core_id);
                 let aux_context: *mut AuxContext = unsafe { std::mem::transmute(aux_context) };
                 let cur_job2: &AtomicUsize;
                 {
