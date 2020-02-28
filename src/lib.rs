@@ -1,6 +1,7 @@
 #![feature(test)]
 #![deny(warnings)]
 #![feature(asm)]
+#![feature(new_uninit)]
 extern crate scoped_threadpool;
 extern crate test;
 extern crate rayon;
