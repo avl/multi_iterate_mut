@@ -12,7 +12,7 @@ use arrayvec::ArrayVec;
 use std::cell::UnsafeCell;
 
 use std::intrinsics::copy_nonoverlapping;
-use std::marker::{PhantomData};
+use std::marker::PhantomData;
 
 #[cfg(test)]
 use test::Bencher;
@@ -23,7 +23,7 @@ use crate::PROB_SIZE;
 
 
 const MAX_THREADS: usize = 8;
-const SUB_BATCH: usize = 256;
+const SUB_BATCH: usize = 1024;
 const MAX_CLOSURE_COUNT: usize = 64*SUB_BATCH;
 
 #[repr(align(64))]
@@ -69,6 +69,7 @@ pub struct AuxScheduler<'a, A> {
 }
 
 impl<'a, AH: AuxHolder> AuxScheduler<'a, AH> {
+    #[inline(always)]
     pub(crate) fn schedule<'b, FA: FnOnce(AH) + Send + Sync + 'b>(&'b mut self, channel: u32, f: FA) {
         self.aux_context.defer_stores[channel as usize].add(f);
     }
@@ -105,6 +106,7 @@ impl DeferStore {
             magic: [0;MAX_CLOSURE_COUNT],
         }
     }
+    #[inline(always)]
     fn add<AH: AuxHolder + Send + Sync, FA: FnOnce(AH)>(&mut self, f: FA) {
 
         if std::mem::align_of::<FA>() > 8 {
@@ -311,6 +313,8 @@ impl InnerPool {
                 //let mut debug_wait_cycles = 0usize;
                 let mut iteration = 0;
 
+                let friend_sync_state = aux_context.friend_sync_state;
+                let mut cur_aux_chunk = aux_context.cur_aux_chunk;
                 while iteration < iterations {
                     let cur_len = len_remaining.min(SUB_BATCH);
 
@@ -324,21 +328,17 @@ impl InnerPool {
 
 
                     loop {
-                        let friend = unsafe { &*aux_context.friend_sync_state };
+                        let friend = unsafe { &*friend_sync_state };
                         if friend.load(Ordering::SeqCst) >= our_sync_counter {
-                            aux_context.defer_stores[aux_context.cur_aux_chunk].process(unsafe{auxcopy.cheap_copy()});
+                            aux_context.defer_stores[cur_aux_chunk].process(unsafe{auxcopy.cheap_copy()});
                             our_sync_counter += 1;
                             aux_context.own_sync_state.0.store(our_sync_counter, Ordering::SeqCst);
-                            aux_context.cur_aux_chunk += 1;
-                            aux_context.cur_aux_chunk %= MAX_THREADS;
+                            cur_aux_chunk += 1;
+                            cur_aux_chunk %= MAX_THREADS;
                             iteration += 1;
                             break;
                         }
                         spin_loop_hint();
-                        {
-                            //debug_wait_cycles+=1;
-                        }
-
                     }
                 }
             });
@@ -461,7 +461,7 @@ impl InnerPool {
         }
 
     }
-    #[inline]
+    #[inline(always)]
     pub fn thread_count(&self) -> usize {
         self.threads.len()
     }
