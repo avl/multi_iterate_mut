@@ -69,6 +69,7 @@ pub struct AuxScheduler<'a, A> {
 }
 
 impl<'a, AH: AuxHolder> AuxScheduler<'a, AH> {
+    #[inline(always)]
     pub(crate) fn schedule<'b, FA: FnOnce(AH) + Send + Sync + 'b>(&'b mut self, channel: u32, f: FA) {
         self.aux_context.defer_stores[channel as usize].add(f);
     }
@@ -131,6 +132,7 @@ impl DeferStore {
             magic: rw,
         }
     }
+    #[inline(always)]
     fn add<AH: AuxHolder + Send + Sync, FA: FnOnce(AH)>(&mut self, f: FA) {
 
         if std::mem::align_of::<FA>() > 8 {
@@ -254,7 +256,7 @@ pub trait AuxHolder: Send + Sync {
 impl Pool {
 
 
-    #[inline]
+    #[inline(always)]
     pub fn execute_all<'a, AH: 'a + AuxHolder, T: Send + Sync, F>(&mut self, data: &'a mut [T], mut aux: AH, f: F) where
         F: Fn(usize, &'a mut [T], &mut AuxScheduler<'a, AH>) + Send + 'a
     {
@@ -467,7 +469,7 @@ impl Pool {
 
         p
     }
-    #[inline]
+    #[inline(always)]
     pub fn thread_count(&self) -> usize {
         self.threads.len()
     }
