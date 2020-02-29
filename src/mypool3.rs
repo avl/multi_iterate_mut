@@ -24,7 +24,7 @@ use crate::PROB_SIZE;
 
 const MAX_THREADS: usize = 8;
 const SUB_BATCH: usize = 1024;
-const MAX_CLOSURE_COUNT: usize = 64*SUB_BATCH;
+const MAX_CLOSURE_COUNT: usize = 256*SUB_BATCH;
 
 #[repr(align(64))]
 struct SyncStateInOwnCacheline(AtomicUsize);
@@ -931,13 +931,15 @@ pub fn benchmark_mypool3_aux_new(bench: &mut Bencher) {
 }
 
 
+
+#[ignore]
 #[test]
 pub fn custombenchmark_mypool3_aux_new2() {
 
     let mut data = make_example_data();
     let mut aux = make_example_data();
     let mut it=0;
-    loop {
+    for _ in 0..10 {
         let mut pool = Pool::new();
 
         let auxref = &mut aux;
