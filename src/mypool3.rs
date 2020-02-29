@@ -229,6 +229,7 @@ impl Pool {
             thread.thread_id.take().unwrap().join().unwrap();
         }
     }
+    #[inline(always)]
     pub fn thread_count(&self) -> usize {
         self.inner.thread_count()
     }
@@ -237,6 +238,7 @@ impl Pool {
         InnerPool::new()
 
     }
+    #[inline(always)]
     pub fn execute_all<'a, AH: 'a + AuxHolder, T: Send + Sync, F>(&mut self, data: &'a mut [T], aux: AH, f: F) where
         F: Fn(usize, &'a mut [T], &mut AuxScheduler<'a, AH>) + Send + 'a {
         self.inner.execute_all(data,aux,f);
@@ -248,7 +250,7 @@ impl Pool {
 impl InnerPool {
 
 
-    #[inline]
+    #[inline(always)]
     pub fn execute_all<'a, AH: 'a + AuxHolder, T: Send + Sync, F>(&mut self, data: &'a mut [T], mut aux: AH, f: F) where
         F: Fn(usize, &'a mut [T], &mut AuxScheduler<'a, AH>) + Send + 'a
     {
@@ -943,8 +945,11 @@ pub fn custombenchmark_mypool3_aux_new2() {
         let poolref = &mut pool;
 
         let bef = Instant::now();
+        let mut mintime = std::u128::MAX;
+        let mut maxtime = 0;
         for _ in 0..10000
             {
+                let bef2 = Instant::now();
                 execute_all(poolref, dataref, auxref,
                             #[inline(always)]
                                 |idx, _x, mut ctx| {
@@ -953,9 +958,13 @@ pub fn custombenchmark_mypool3_aux_new2() {
                                                  auxitem.data += 1;
                                              });
                             });
+                let aft2 = Instant::now();
+                maxtime = maxtime.max((aft2-bef2).as_micros());
+                mintime = mintime.min((aft2-bef2).as_micros());
+                std::thread::yield_now();
             }
         let aft = Instant::now();
-        println!("#{} Time: {:?}",it, (aft-bef).as_micros()/10_000);
+        println!("#{} Time: {:?} outlyer: {} {}",it, (aft-bef).as_micros()/10000,mintime, maxtime);
         println!("\n");
         it+=1;
     }
